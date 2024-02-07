@@ -1,0 +1,10 @@
+cmake-build-debug/
+glib/
+.idea/
+
+*.nsys
+*.bmp
+*.3bod
+
+CMakeLists.txt
+notes.txt
