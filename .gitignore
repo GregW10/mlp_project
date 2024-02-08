@@ -2,9 +2,13 @@ cmake-build-debug/
 glib/
 .idea/
 
+experiment*/
+
 *.nsys
 *.bmp
 *.3bod
+*.pdf
 
 CMakeLists.txt
 notes.txt
+main
