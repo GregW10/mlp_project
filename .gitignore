@@ -1,13 +1,16 @@
 cmake-build-debug/
 glib/
 .idea/
+shit*/
 
 experiment*/
 
+*.sh
 *.nsys
 *.bmp
 *.3bod
 *.pdf
+shit*
 
 CMakeLists.txt
 notes.txt

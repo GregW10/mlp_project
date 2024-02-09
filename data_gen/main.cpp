@@ -2,51 +2,147 @@
 
 /* Acronyms:
  * - COM: Centre of Mass
- * - COMV: Centre of Mass velocity
+ * - COMV: Centre of Mass Velocity
  * - EV: Escape Velocity
+ * - KE: Kinetic Energy
+ * - PE: Potential Energy
+ * - TE: Total Energy
+ * - SD: Standard Deviation
+ * - LN: Log-Normal
  * */
 
 // generate 3 random velocities
 // make sure no body exceeds escape velocity (EV) - tricky because others might move away, maybe have threshold under EV
 // subtract COM velocity from all velocities
 
-typedef unsigned long long ull_t;
+// typedef uint64_t ull_t; // bad, remove this
+using ptype_ln = std::lognormal_distribution<long double>::param_type;
 
 std::mutex mutex;
-ull_t evols;
+uint64_t evols;
+uint64_t epochs;
+
+bool e_stop;
+bool verbose;
+bool nsys;
 
 unsigned int running = 0;
 
-void run_sim(gtd::sys sys, ull_t epochs) {
-
+void run_sim(gtd::sys sys, uint64_t batch_num, uint64_t num_in_batch) {
+    if (sys.num_bodies() != 3)
+        return;
+    gtd::String path{true};
+    path.append_back(batch_num - 1); // to make it start at 0
+    path.push_back('_');
+    path.append_back(num_in_batch);
+    // add in verbose stuff
+    if (mkdir(path.c_str(), S_IRWXU | S_IRWXG | S_IRWXO) == -1) {
+        std::cerr << "Error: could not create directory \"" << path << "\".\n";
+        exit(1); // not the best idea... will find a more graceful way to deal with this (reduce evols and return?)
+    }
+    path.append_back("/init_params.csv");
+    std::ofstream params{path.c_str(), std::ios_base::out | std::ios_base::trunc};
+    if (!params.good())
+        goto rest; // if for some reason the file cannot be created, it's not the end of the world
+    params << "bod1_pos_x,bod1_pos_y,bod1_pos_z,bod1_vel_x,bod1_vel_y,bod1_vel_z,bod1_mass,"
+              "bod2_pos_x,bod2_pos_y,bod2_pos_z,bod2_vel_x,bod2_vel_y,bod2_vel_z,bod2_mass,"
+              "bod3_pos_x,bod3_pos_y,bod3_pos_z,bod3_vel_x,bod3_vel_y,bod3_vel_z,bod3_mass\r\n";
+    for (const auto &b : sys)
+        params << b.pos()[0] << ',' << b.pos()[1] << ',' << b.pos()[2] << ','
+               << b.vel()[0] << ',' << b.vel()[1] << ',' << b.vel()[2] << ','
+               << b.mass() << ',';
+    params.seekp(-1, std::ios_base::cur);
+    params << "\r\n";
+    params.close();
+    rest:
+    path.erase_chars(path.get_length() - 15);
+    path.append_back("log.3bod");
+    gtd::f3bod<long double> file{path.c_str(), &sys, epochs + 1};
+    file.add_entry();
+    uint64_t counter = 1;
+    if (nsys) {
+        path.erase_chars(path.get_length() - 8);
+        path.append_back("epoch");
+        unsigned long long max_len = llroundl(floorl(log10l(epochs)) + 1);
+        uint64_t epoch_len = path.get_length();
+        char *npath = new char[epoch_len + max_len + 6]; // "epochXX...XX.nsys"
+        gtd::strcpy_c(npath, path.c_str());
+        path.clear();
+        char *last_digit = npath + epoch_len + max_len - 1;
+        char *ptr = npath + epoch_len;
+        while (counter++ <= max_len)
+            *ptr++ = '0';
+        gtd::strcpy_c(ptr, ".nsys");
+        sys.to_nsys(npath);
+        counter = 1;
+        uint64_t val;
+        while (counter <= epochs) {
+            sys.evolve();
+            file.add_entry();
+            val = counter++;
+            ptr = last_digit;
+            while (val > 0) {
+                *ptr-- = (val % 10) + 48;
+                val /= 10;
+            }
+            sys.to_nsys(npath);
+            if (e_stop) {
+                // check if a body's velocity is greater than its EV w.r.t. the other two (maybe by a bit more)
+            }
+        }
+        delete [] npath;
+    }
+    else {
+        while (counter++ <= epochs) {
+            sys.evolve();
+            file.add_entry();
+            if (e_stop) {
+                // check if a body's velocity is greater than its EV w.r.t. the other two (maybe by a bit more)
+            }
+        }
+    }
+    // std::lock_guard<std::mutex> guard{mutex}; // uncomment once using threads
+    // --evols;
 }
 
 int main(int argc, char **argv) {
     gtd::parser parser{argc, argv}; // I create an instance of my `gtd::parser` class to allow easy extraction of args
     evols = parser.get_arg("--evolutions", 100'000ull); // number of evolutions to simulate
-    ull_t epochs = parser.get_arg("--epochs", 10'000ull); // number of simulation epochs to write per evolution
-    ull_t iters = parser.get_arg("--iterations", 1'000'000'000ull); // number of iterations per epoch
-    ull_t num_m = parser.get_arg("--num_mass_means", 100ull); // number of different mean masses to use
-    long double start_mass = parser.get_arg("--starting_mass", 1'000.0l); // starting mean mass value
-    long double mass_step = parser.get_arg("--mass_step", TRILLION/num_m); // step in mean mass value
+    epochs = parser.get_arg("--epochs", 10'000ull); // number of simulation epochs to write per evolution
+    uint64_t iters = parser.get_arg("--iterations", 1'000'000ull); // number of iterations per epoch
+    uint64_t num_m = parser.get_arg("--num_mass_means", 100ull); // number of different mean masses to use
+    // `num_m` has to be checked up here, as the default value for `mass_step` uses it
+    if (!num_m) {
+        std::cerr << "Error: cannot have zero mass means.\n";
+        return 1;
+    }
+    if (num_m > evols) {
+        std::cerr << "Error: cannot have more mass means than number of evolutions.\n";
+        return 1;
+    }
+    const long double start_mass = parser.get_arg("--starting_mass", 1'000.0l); // starting mean mass value
+    const long double mass_step = parser.get_arg("--mass_step", TRILLION/(num_m - 1)); // step in mean mass value
+    const long double mass_sd_scaling = parser.get_arg("--mass_sd_scaling", 0.125l); // mass_SD = scaling*mean_mass
     // Despite not having collisions activated for the training data, I will still give the particles a non-zero radius,
     // in case I wish to render certain evolutions with my ray-tracer later:
-    long double radius = parser.get_arg("--radius", 0.0625l);
-    long double dt = parser.get_arg("--timestep", 1.0l/pow(2, 28)); // time-step used to evolve simulations
-    long double box_x = parser.get_arg("--box_width", 2.0l); // length of bounding box along x
-    long double box_y = parser.get_arg("--box_length", 2.0l); // length of bounding box along y
-    long double box_z = parser.get_arg("--box_height", 2.0l); // length of bounding box along z
+    const long double radius = parser.get_arg("--radius", 0.0625l);
+    const long double dt = parser.get_arg("--timestep", 1.0l/pow(2, 16)); // time-step used to evolve simulations
+    const long double vel_scale = parser.get_arg("--velocity_scaling", 0.5l); // scaling factor for velocities
+    const long double box_x = parser.get_arg("--box_width", 2.0l); // length of bounding box along x
+    const long double box_y = parser.get_arg("--box_length", 2.0l); // length of bounding box along y
+    const long double box_z = parser.get_arg("--box_height", 2.0l); // length of bounding box along z
     // Note: the box is always centered around the COM, so centre coordinates are never supplied as an argument
-    long double eps = parser.get_arg("--softening", 1.0l/65'536.0l); // softening length
+    const long double eps = parser.get_arg("--softening", 1.0l/65'536.0l); // softening length
     // The "minimum separation" is the minimum starting separation the bodies have to have:
     long double min_sep_def = eps*10; // the default is 10 softening lengths - if the bodies are closer, pos. resampled
     long double min_sep = parser.get_arg("--min_sep", min_sep_def);
     // This next parameter is important, as it will determine whether the evolution of the 3-body system should stop if
     // one of the 3 bodies ends up being flung far out:
-    bool e_stop = parser.get_arg("-e", false) | parser.get_arg("--early_stop", false); // bitwise given short-circuit
+    e_stop = parser.get_arg("-e", false) | parser.get_arg("--early_stop", false); // bitwise given short-circuit
     // Note that it could only ever be one body being flung far out, as all bodies getting flung away from each other
-    // would violate the conservation of energy (assuming they all start out with velocities below their mutual EVs).
-    bool verbose = parser.get_arg("-v", false) | parser.get_arg("--verbose", false);
+    // would violate the conservation of energy (assuming they all start out with tot_KE < tot_PE).
+    verbose = parser.get_arg("-v", false) | parser.get_arg("--verbose", false); // for verbose output
+    nsys = parser.get_arg("-n", false) | parser.get_arg("--output_nsys", false); // for nsys files too
     if (!parser.empty()) {
         std::cerr << BOLD_TXT(RED_TXT("Error!")) YELLOW_TXT(" Unrecognised arguments:") "\n" << BLUE_TXT_START;
         for (const auto &arg : parser)
@@ -66,14 +162,6 @@ int main(int argc, char **argv) {
         std::cerr << "Error: cannot have zero iterations per epoch.\n";
         return 1;
     }
-    if (!num_m) {
-        std::cerr << "Error: cannot have zero mass means.\n";
-        return 1;
-    }
-    if (num_m > evols) {
-        std::cerr << "Error: cannot have more mass means than number of evolutions.\n";
-        return 1;
-    }
     if (start_mass <= 0) {
         std::cerr << "Error: starting mass must be positive.\n";
         return 1;
@@ -82,12 +170,20 @@ int main(int argc, char **argv) {
         std::cerr << "Error: mass step must be positive.\n";
         return 1;
     }
+    if (mass_sd_scaling <= 0) {
+        std::cerr << "Error: the scaling factor applied to the mass to produce the S.D. must be positive.\n";
+        return 1;
+    }
     if (radius < 0) {
         std::cerr << "Error: radius cannot be negative.\n";
         return 1;
     }
     if (dt <= 0) {
         std::cerr << "Error: time-step must be positive.\n";
+        return 1;
+    }
+    if (vel_scale <= 0 || vel_scale > 1) {
+        std::cerr << "Error: the velocity scaling factor must be within the (0,1] interval.\n";
         return 1;
     }
     if (box_x <= 0) {
@@ -147,11 +243,13 @@ int main(int argc, char **argv) {
                   YELLOW_TXT("\" file...") << std::endl;
     logf << "Distinct evolutions = " << evols << "\nEpochs per evolution = " << epochs << "\nIterations per epoch = "
          << iters << "\nNumber of mass means = " << num_m << "\nStarting mean mass = " << start_mass
-         << " kg\nStep in mean mass = " << mass_step << " kg\nRadius of bodies = " << radius << " m\nTime-step = " << dt
-         << " s\nBox length along x = " << box_x << " m\nBox length along y = " << box_y << " m\nBox length along z = "
+         << " kg\nStep in mean mass = " << mass_step << " kg\nSD fraction of mean = " << mass_sd_scaling
+         << "\nRadius of bodies = " << radius << " m\nTime-step = " << dt
+         << " s\nVelocity scaling factor = " << vel_scale
+         << "\nBox length along x = " << box_x << " m\nBox length along y = " << box_y << " m\nBox length along z = "
          << box_z << " m\nSoftening length = " << eps << " m\nDefault min. sep. = " << min_sep_def
          << " m\nActual min. sep. = " << min_sep << " m\nEarly stopping = " << std::boolalpha << e_stop
-         << "\nVerbose output = " << verbose << '\n';
+         << "\nVerbose output = " << verbose << "\nOutput nsys = " << nsys << '\n';
     if (verbose)
         std::cout << YELLOW_TXT("Configurations written to \"") BLUE_TXT_START << path <<
                   YELLOW_TXT("\" file.") << std::endl;
@@ -166,30 +264,79 @@ int main(int argc, char **argv) {
     long double max_z = box_z/2.0l;
     long double min_z = -max_z;
     gtd::sys sys;
-    sys.set_timestep(dt);
-    sys.set_iterations(iters);
-    sys.emplace_body(false); sys.emplace_body(false); sys.emplace_body(false);
+    sys.timestep(dt);
+    sys.iters(iters);
+    sys.softening(eps);
+    sys.emplace_body(false).emplace_body(false).emplace_body(false);
+    for (gtd::bod_0f &b : sys)
+        b.set_radius(radius);
+    gtd::bod_0f *bod1 = &sys.front();
+    gtd::bod_0f *bod2 = &sys[1];
+    gtd::bod_0f *bod3 = &sys.back();
     std::mt19937_64 rng{std::random_device{}()}; // Mersenne-Twister engine
+    // Isotropic position and velocity distributions:
     std::uniform_real_distribution<long double> pdist_x{min_x, max_x}; // used for position value x-coordinate
     std::uniform_real_distribution<long double> pdist_y{min_y, max_y}; // used for position value y-coordinate
     std::uniform_real_distribution<long double> pdist_z{min_z, max_z}; // used for position value z-coordinate
-    std::uniform_real_distribution<long double> vdist; // used for velocity values
+    std::uniform_real_distribution<long double> vdist{-1, 1}; // used for velocity values
     std::lognormal_distribution<long double> mdist; // used for mass values
-    while (evols > 0) {
+    long double final_scaling;
+    gtd::vec3 com_vel;
+    const long double mass_batch_size = ((long double) evols)/num_m;
+    uint64_t mass_counter = 1; // number of distinct mass values used
+    uint64_t next_mass_switch = llroundl(mass_batch_size);
+    uint64_t num_in_batch = 0;
+    long double mass_mean = start_mass;
+    long double mass_sd = mass_sd_scaling*mass_mean;
+    std::pair<long double, long double> mu_sd_gauss;
+    uint64_t counter = 0;
+    while (/* evols > 0 */ counter < evols) {
         do {
-            sys.front().pos()[0] = pdist_x(rng); // this is more efficient than using a loop, despite more clutter
-            sys.front().pos()[1] = pdist_y(rng);
-            sys.front().pos()[2] = pdist_z(rng);
-            sys[1].pos()[0] = pdist_x(rng);
-            sys[1].pos()[1] = pdist_y(rng);
-            sys[1].pos()[2] = pdist_z(rng);
-            if (gtd::vec_ops::distance(sys.front().pos(), sys[1].pos()) < min_sep)//check here to avoid redundant below
+            bod1->pos()[0] = pdist_x(rng); // this is more efficient than using a loop, despite more clutter
+            bod1->pos()[1] = pdist_y(rng);
+            bod1->pos()[2] = pdist_z(rng);
+            bod2->pos()[0] = pdist_x(rng);
+            bod2->pos()[1] = pdist_y(rng);
+            bod2->pos()[2] = pdist_z(rng);
+            if (gtd::vec_ops::distance(bod1->pos(), bod2->pos()) < min_sep)//check here to avoid redundancy below
                 continue;
-            sys.back().pos()[0] = pdist_x(rng);
-            sys.back().pos()[1] = pdist_y(rng);
-            sys.back().pos()[2] = pdist_z(rng);
-        } while (gtd::vec_ops::distance(sys.front().pos(), sys[2].pos()) < min_sep ||
-                 gtd::vec_ops::distance(sys[1].pos(), sys.back().pos()) < min_sep);
+            bod3->pos()[0] = pdist_x(rng);
+            bod3->pos()[1] = pdist_y(rng);
+            bod3->pos()[2] = pdist_z(rng);
+        } while (gtd::vec_ops::distance(bod1->pos(), bod3->pos()) < min_sep ||
+                 gtd::vec_ops::distance(bod2->pos(), bod3->pos()) < min_sep);
+        for (gtd::bod_0f &bod : sys) {
+            bod.vel()[0] = vdist(rng);
+            bod.vel()[1] = vdist(rng);
+            bod.vel()[2] = vdist(rng);
+        }
+        com_vel = sys.com_vel();
+        for (gtd::bod_0f &bod : sys)
+            bod.vel() -= com_vel; // velocities have to be in the COM frame!!!
+        // Sanity-check, will remove later:
+        // std::cout << "System COM vel.: " << sys.com_vel() << std::endl;
+        final_scaling = vel_scale/sqrtl(gtd::beta_factor(sys)); // have decided NOT to take sqrt of velocity scaling
+        for (gtd::bod_0f &bod : sys)
+            bod.vel() *= final_scaling;
+        // Sanity-check, will remove later:
+        // std::cout << "Beta-factor after normalisation and scaling by " << vel_scale << ": " << gtd::beta_factor(sys)
+        //           << std::endl;
+        // Now I set the masses:
+        if (counter == next_mass_switch) {
+            mass_mean = start_mass + mass_counter*mass_step; // this approach keeps higher precision than rep. add.
+            mass_sd = mass_sd_scaling*mass_mean;
+            next_mass_switch = llroundl(++mass_counter*mass_batch_size);
+            num_in_batch = 0;
+        }
+        mu_sd_gauss = gtd::lognormal_to_gauss(mass_mean, mass_sd); // convert LN mean and SD into Gaussian mean and SD
+        // The Gaussian mean and SD are the parameters required for `std::lognormal_distribution`:
+        mdist.param(ptype_ln{mu_sd_gauss.first, mu_sd_gauss.second});
+        for (gtd::bod_0f &bod : sys)
+            bod.set_mass(mdist(rng));
+        run_sim(sys, mass_counter, num_in_batch);
+        ++counter;
+        ++num_in_batch;
+        std::cout << "Evolution " << counter << '/' << evols << " completed." << std::endl;
     }
     return 0;
 }
