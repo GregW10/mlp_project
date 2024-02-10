@@ -19,14 +19,16 @@
 using ptype_ln = std::lognormal_distribution<long double>::param_type;
 
 std::mutex mutex;
+std::condition_variable cv;
+std::thread::id finished;
+std::thread::id def_id; // default thread ID
+
 uint64_t evols;
 uint64_t epochs;
 
 bool e_stop;
 bool verbose;
 bool nsys;
-
-unsigned int running = 0;
 
 void run_sim(gtd::sys sys, uint64_t batch_num, uint64_t num_in_batch) {
     if (sys.num_bodies() != 3)
@@ -35,7 +37,6 @@ void run_sim(gtd::sys sys, uint64_t batch_num, uint64_t num_in_batch) {
     path.append_back(batch_num - 1); // to make it start at 0
     path.push_back('_');
     path.append_back(num_in_batch);
-    // add in verbose stuff
     if (mkdir(path.c_str(), S_IRWXU | S_IRWXG | S_IRWXO) == -1) {
         std::cerr << "Error: could not create directory \"" << path << "\".\n";
         exit(1); // not the best idea... will find a more graceful way to deal with this (reduce evols and return?)
@@ -101,16 +102,24 @@ void run_sim(gtd::sys sys, uint64_t batch_num, uint64_t num_in_batch) {
             }
         }
     }
-    // std::lock_guard<std::mutex> guard{mutex}; // uncomment once using threads
-    // --evols;
+    std::unique_lock<std::mutex> lock{mutex};
+    cv.wait(lock, [](){return def_id == finished;});
+    finished = std::this_thread::get_id();
+    cv.notify_all();
+    lock.unlock();
 }
 
 int main(int argc, char **argv) {
     gtd::parser parser{argc, argv}; // I create an instance of my `gtd::parser` class to allow easy extraction of args
     evols = parser.get_arg("--evolutions", 100'000ull); // number of evolutions to simulate
+    if (!evols) {
+        std::cerr << "Error: cannot have zero evolutions.\n";
+        return 1;
+    }
     epochs = parser.get_arg("--epochs", 10'000ull); // number of simulation epochs to write per evolution
     uint64_t iters = parser.get_arg("--iterations", 1'000'000ull); // number of iterations per epoch
-    uint64_t num_m = parser.get_arg("--num_mass_means", 100ull); // number of different mean masses to use
+    // Number of different mean masses to use:
+    uint64_t num_m = parser.get_arg("--num_mass_means", evols /* (uint64_t) ceill(((long double) evols)/100.0l) */);
     // `num_m` has to be checked up here, as the default value for `mass_step` uses it
     if (!num_m) {
         std::cerr << "Error: cannot have zero mass means.\n";
@@ -148,10 +157,6 @@ int main(int argc, char **argv) {
         for (const auto &arg : parser)
             std::cout << arg << '\n';
         std::cout << RESET_TXT_FLAGS;
-        return 1;
-    }
-    if (!evols) {
-        std::cerr << "Error: cannot have zero evolutions.\n";
         return 1;
     }
     if (!epochs) {
@@ -255,8 +260,6 @@ int main(int argc, char **argv) {
                   YELLOW_TXT("\" file.") << std::endl;
     logf.close();
     delete [] path;
-    unsigned int numt = std::thread::hardware_concurrency();
-    numt = numt ? numt : 1; // single-thread execution if number could not be determined
     long double max_x = box_x/2.0l;
     long double min_x = -max_x;
     long double max_y = box_y/2.0l;
@@ -281,6 +284,7 @@ int main(int argc, char **argv) {
     std::uniform_real_distribution<long double> vdist{-1, 1}; // used for velocity values
     std::lognormal_distribution<long double> mdist; // used for mass values
     long double final_scaling;
+    gtd::vec3 com_pos;
     gtd::vec3 com_vel;
     const long double mass_batch_size = ((long double) evols)/num_m;
     uint64_t mass_counter = 1; // number of distinct mass values used
@@ -290,7 +294,26 @@ int main(int argc, char **argv) {
     long double mass_sd = mass_sd_scaling*mass_mean;
     std::pair<long double, long double> mu_sd_gauss;
     uint64_t counter = 0;
+    // Concurrency stuff:
+    unsigned int running = 0;
+    unsigned int numt = std::thread::hardware_concurrency();
+    numt = numt ? numt : 1; // single-thread execution if number could not be determined
+    std::set<std::thread, gtd::thread_comparator> threads;
+    std::unique_lock<std::mutex> lock{mutex, std::defer_lock};
     while (/* evols > 0 */ counter < evols) {
+        // First I set the masses (as they are required for COM calculations):
+        if (counter == next_mass_switch) {
+            mass_mean = start_mass + mass_counter*mass_step; // this approach keeps higher precision than rep. add.
+            mass_sd = mass_sd_scaling*mass_mean;
+            next_mass_switch = llroundl(++mass_counter*mass_batch_size);
+            num_in_batch = 0;
+        }
+        mu_sd_gauss = gtd::lognormal_to_gauss(mass_mean, mass_sd); // convert LN mean and SD into Gaussian mean and SD
+        // The Gaussian mean and SD are the parameters required for `std::lognormal_distribution`:
+        mdist.param(ptype_ln{mu_sd_gauss.first, mu_sd_gauss.second});
+        for (gtd::bod_0f &bod : sys)
+            bod.set_mass(mdist(rng));
+        // Now I generate initial random positions with components in [-1,1]:
         do {
             bod1->pos()[0] = pdist_x(rng); // this is more efficient than using a loop, despite more clutter
             bod1->pos()[1] = pdist_y(rng);
@@ -305,38 +328,45 @@ int main(int argc, char **argv) {
             bod3->pos()[2] = pdist_z(rng);
         } while (gtd::vec_ops::distance(bod1->pos(), bod3->pos()) < min_sep ||
                  gtd::vec_ops::distance(bod2->pos(), bod3->pos()) < min_sep);
+        // Now I centre the origin of the coordinate system at the COM:
+        com_pos = sys.com_pos();
+        for (gtd::bod_0f &b : sys)
+            b.pos() -= com_pos;
+        // Finally, I set the velocities. First I generate their x, y and z components in [-1,1]:
         for (gtd::bod_0f &bod : sys) {
             bod.vel()[0] = vdist(rng);
             bod.vel()[1] = vdist(rng);
             bod.vel()[2] = vdist(rng);
         }
+        // Next, I subtract the COM velocity from all bodies to ensure we are in the COM frame:
         com_vel = sys.com_vel();
         for (gtd::bod_0f &bod : sys)
             bod.vel() -= com_vel; // velocities have to be in the COM frame!!!
-        // Sanity-check, will remove later:
-        // std::cout << "System COM vel.: " << sys.com_vel() << std::endl;
+        // I calculate the final scaling factor for velocities and multiply this by all velocities:
         final_scaling = vel_scale/sqrtl(gtd::beta_factor(sys)); // have decided NOT to take sqrt of velocity scaling
         for (gtd::bod_0f &bod : sys)
             bod.vel() *= final_scaling;
-        // Sanity-check, will remove later:
-        // std::cout << "Beta-factor after normalisation and scaling by " << vel_scale << ": " << gtd::beta_factor(sys)
-        //           << std::endl;
-        // Now I set the masses:
-        if (counter == next_mass_switch) {
-            mass_mean = start_mass + mass_counter*mass_step; // this approach keeps higher precision than rep. add.
-            mass_sd = mass_sd_scaling*mass_mean;
-            next_mass_switch = llroundl(++mass_counter*mass_batch_size);
-            num_in_batch = 0;
+        if (threads.size() == numt) {
+            lock.lock();
+            cv.wait(lock, [](){return def_id != finished;});
+            threads.erase(threads.find(finished));
+            finished = def_id;
+            cv.notify_all();
+            lock.unlock();
         }
-        mu_sd_gauss = gtd::lognormal_to_gauss(mass_mean, mass_sd); // convert LN mean and SD into Gaussian mean and SD
-        // The Gaussian mean and SD are the parameters required for `std::lognormal_distribution`:
-        mdist.param(ptype_ln{mu_sd_gauss.first, mu_sd_gauss.second});
-        for (gtd::bod_0f &bod : sys)
-            bod.set_mass(mdist(rng));
-        run_sim(sys, mass_counter, num_in_batch);
+        threads.emplace(run_sim, sys, mass_counter, num_in_batch);
         ++counter;
         ++num_in_batch;
         std::cout << "Evolution " << counter << '/' << evols << " completed." << std::endl;
     }
+    while (!threads.empty()) {
+        lock.lock();
+        cv.wait(lock, [](){return def_id != finished;});
+        threads.erase(threads.find(finished));
+        finished = def_id;
+        cv.notify_all();
+        lock.unlock();
+    }
+    threads.clear();
     return 0;
 }

@@ -11,6 +11,7 @@
 #include "../glib/misc/gregparse.hpp"
 #include <thread>
 #include <mutex>
+#include <condition_variable>
 
 namespace gtd {
     std::pair<long double, long double> esc_vel_mags_com(long double m1, long double m2, long double sep) {
@@ -189,6 +190,21 @@ namespace gtd {
             if (file->is_open())
                 file->close();
             delete file;
+        }
+    };
+    // Here I define a trivial class used to compare two `std::thread` objects, such that `std::thread` objects can be
+    // added to an `std::set`, where the `Compare` type is set to `thread_comparator`:
+    class thread_comparator {
+    public:
+        struct is_transparent {};
+        bool operator()(const std::thread &t1, const std::thread &t2) const noexcept {
+            return t1.get_id() < t2.get_id();
+        }
+        bool operator()(const std::thread &_t, const std::thread::id &_i) const noexcept {
+            return _t.get_id() < _i;
+        }
+        bool operator()(const std::thread::id &_i, const std::thread &_t) const noexcept {
+            return _i < _t.get_id();
         }
     };
 }
