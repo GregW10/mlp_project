@@ -18,10 +18,12 @@
 // typedef uint64_t ull_t; // bad, remove this
 using ptype_ln = std::lognormal_distribution<long double>::param_type;
 
-std::mutex mutex;
+std::mutex main_mutex;
+std::mutex worker_mutex;
 std::condition_variable cv;
 std::thread::id finished;
 std::thread::id def_id; // default thread ID
+unsigned int running = 0; // to log the rumber of worker threads running at the same time
 
 uint64_t evols;
 uint64_t epochs;
@@ -38,8 +40,10 @@ void run_sim(gtd::sys sys, uint64_t batch_num, uint64_t num_in_batch) {
     path.push_back('_');
     path.append_back(num_in_batch);
     if (mkdir(path.c_str(), S_IRWXU | S_IRWXG | S_IRWXO) == -1) {
+        std::lock_guard<std::mutex> guard{worker_mutex};
         std::cerr << "Error: could not create directory \"" << path << "\".\n";
-        exit(1); // not the best idea... will find a more graceful way to deal with this (reduce evols and return?)
+        --running;
+        // exit(1); // not the best idea... will find a more graceful way to deal with this (reduce evols and return?)
     }
     path.append_back("/init_params.csv");
     std::ofstream params{path.c_str(), std::ios_base::out | std::ios_base::trunc};
@@ -102,16 +106,15 @@ void run_sim(gtd::sys sys, uint64_t batch_num, uint64_t num_in_batch) {
             }
         }
     }
-    std::unique_lock<std::mutex> lock{mutex};
-    cv.wait(lock, [](){return def_id == finished;});
-    finished = std::this_thread::get_id();
-    cv.notify_all();
-    lock.unlock();
+    std::lock_guard<std::mutex> guard{worker_mutex}; // acquire worker mutex to stop other workers from red. `running`
+    --running; // reduce the counter for the number of threads running
+    cv.notify_one(); // notify `main` that the worker thread finished, `main` either creates another thread or exits
 }
 
 int main(int argc, char **argv) {
     gtd::parser parser{argc, argv}; // I create an instance of my `gtd::parser` class to allow easy extraction of args
     evols = parser.get_arg("--evolutions", 100'000ull); // number of evolutions to simulate
+    bool tty = isatty(STDOUT_FILENO); // if connected to a terminal, output colours, if not, don't
     if (!evols) {
         std::cerr << "Error: cannot have zero evolutions.\n";
         return 1;
@@ -132,9 +135,9 @@ int main(int argc, char **argv) {
     const long double start_mass = parser.get_arg("--starting_mass", 1'000.0l); // starting mean mass value
     const long double mass_step = parser.get_arg("--mass_step", TRILLION/(num_m - 1)); // step in mean mass value
     const long double mass_sd_scaling = parser.get_arg("--mass_sd_scaling", 0.125l); // mass_SD = scaling*mean_mass
-    // Despite not having collisions activated for the training data, I will still give the particles a non-zero radius,
-    // in case I wish to render certain evolutions with my ray-tracer later:
-    const long double radius = parser.get_arg("--radius", 0.0625l);
+    // I give the particles a radius of zero, as I will be training the NN to predict the collisionless 3-body problem,
+    // and so the particles are treated as point particles:
+    const long double radius = parser.get_arg("--radius", 0.0l);
     const long double dt = parser.get_arg("--timestep", 1.0l/pow(2, 16)); // time-step used to evolve simulations
     const long double vel_scale = parser.get_arg("--velocity_scaling", 0.5l); // scaling factor for velocities
     const long double box_x = parser.get_arg("--box_width", 2.0l); // length of bounding box along x
@@ -145,6 +148,13 @@ int main(int argc, char **argv) {
     // The "minimum separation" is the minimum starting separation the bodies have to have:
     long double min_sep_def = eps*10; // the default is 10 softening lengths - if the bodies are closer, pos. resampled
     long double min_sep = parser.get_arg("--min_sep", min_sep_def);
+    if (2*radius >= min_sep)
+        std::cerr << BOLD_TXT_START MAGENTA_TXT("Warning:")
+        YELLOW_TXT(" there is a non-zero probability that the particles generated with the given radius of ")
+        BLUE_TXT_START
+                  << radius << RESET_TXT_FLAGS BOLD_TXT_START GREEN_TXT(" m ") YELLOW_TXT_START
+                  "will overlap when positions are randomly generated, which would cause termination of the "
+                               "simulation.\nConsider choosing a smaller radius.\n" << RESET_TXT_FLAGS;
     // This next parameter is important, as it will determine whether the evolution of the 3-body system should stop if
     // one of the 3 bodies ends up being flung far out:
     e_stop = parser.get_arg("-e", false) | parser.get_arg("--early_stop", false); // bitwise given short-circuit
@@ -246,6 +256,8 @@ int main(int argc, char **argv) {
     if (verbose)
         std::cout << YELLOW_TXT("Writing configurations to \"") BLUE_TXT_START << path <<
                   YELLOW_TXT("\" file...") << std::endl;
+    unsigned int numt = std::thread::hardware_concurrency();
+    numt = numt ? numt : 1; // single-thread execution if number could not be determined
     logf << "Distinct evolutions = " << evols << "\nEpochs per evolution = " << epochs << "\nIterations per epoch = "
          << iters << "\nNumber of mass means = " << num_m << "\nStarting mean mass = " << start_mass
          << " kg\nStep in mean mass = " << mass_step << " kg\nSD fraction of mean = " << mass_sd_scaling
@@ -254,7 +266,8 @@ int main(int argc, char **argv) {
          << "\nBox length along x = " << box_x << " m\nBox length along y = " << box_y << " m\nBox length along z = "
          << box_z << " m\nSoftening length = " << eps << " m\nDefault min. sep. = " << min_sep_def
          << " m\nActual min. sep. = " << min_sep << " m\nEarly stopping = " << std::boolalpha << e_stop
-         << "\nVerbose output = " << verbose << "\nOutput nsys = " << nsys << '\n';
+         << "\nVerbose output = " << verbose << "\nOutput nsys = " << nsys << "\nNumber of parallel simulations = "
+         << numt << '\n';
     if (verbose)
         std::cout << YELLOW_TXT("Configurations written to \"") BLUE_TXT_START << path <<
                   YELLOW_TXT("\" file.") << std::endl;
@@ -292,14 +305,14 @@ int main(int argc, char **argv) {
     uint64_t num_in_batch = 0;
     long double mass_mean = start_mass;
     long double mass_sd = mass_sd_scaling*mass_mean;
+    std::cout << "Starting mass batch with mean mass " << mass_mean << " kg and SD " << mass_sd << " kg"
+              << std::endl;
     std::pair<long double, long double> mu_sd_gauss;
     uint64_t counter = 0;
-    // Concurrency stuff:
-    unsigned int running = 0;
-    unsigned int numt = std::thread::hardware_concurrency();
-    numt = numt ? numt : 1; // single-thread execution if number could not be determined
     std::set<std::thread, gtd::thread_comparator> threads;
-    std::unique_lock<std::mutex> lock{mutex, std::defer_lock};
+    std::set<std::thread, gtd::thread_comparator>::iterator it;
+    std::unique_lock<std::mutex> mlock{main_mutex};//, std::defer_lock};
+    std::unique_lock<std::mutex> wlock{worker_mutex, std::defer_lock};
     while (/* evols > 0 */ counter < evols) {
         // First I set the masses (as they are required for COM calculations):
         if (counter == next_mass_switch) {
@@ -307,6 +320,8 @@ int main(int argc, char **argv) {
             mass_sd = mass_sd_scaling*mass_mean;
             next_mass_switch = llroundl(++mass_counter*mass_batch_size);
             num_in_batch = 0;
+            std::cout << "Starting mass batch with mean mass " << mass_mean << " kg and SD " << mass_sd << " kg"
+                      << std::endl;
         }
         mu_sd_gauss = gtd::lognormal_to_gauss(mass_mean, mass_sd); // convert LN mean and SD into Gaussian mean and SD
         // The Gaussian mean and SD are the parameters required for `std::lognormal_distribution`:
@@ -346,27 +361,18 @@ int main(int argc, char **argv) {
         final_scaling = vel_scale/sqrtl(gtd::beta_factor(sys)); // have decided NOT to take sqrt of velocity scaling
         for (gtd::bod_0f &bod : sys)
             bod.vel() *= final_scaling;
-        if (threads.size() == numt) {
-            lock.lock();
-            cv.wait(lock, [](){return def_id != finished;});
-            threads.erase(threads.find(finished));
-            finished = def_id;
-            cv.notify_all();
-            lock.unlock();
-        }
-        threads.emplace(run_sim, sys, mass_counter, num_in_batch);
+        if (running == numt)
+            cv.wait(mlock, [&numt](){return running < numt;});
+        wlock.lock();
+        ++running;
+        wlock.unlock();
+        std::thread{run_sim, sys, mass_counter, num_in_batch}.detach(); // create worker thread and immediately detach
         ++counter;
         ++num_in_batch;
-        std::cout << "Evolution " << counter << '/' << evols << " completed." << std::endl;
+        if (verbose)
+            std::cout << "Evolution " << counter << '/' << evols << " dispatched." << std::endl;
     }
-    while (!threads.empty()) {
-        lock.lock();
-        cv.wait(lock, [](){return def_id != finished;});
-        threads.erase(threads.find(finished));
-        finished = def_id;
-        cv.notify_all();
-        lock.unlock();
-    }
-    threads.clear();
+    cv.wait(mlock, [](){return !running;}); // wait for all detached worker threads to have finished running
+    std::cout << "------------------------\nAll evolutions finished.\n------------------------" << std::endl;
     return 0;
 }
