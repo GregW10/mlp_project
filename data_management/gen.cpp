@@ -71,7 +71,7 @@ void run_sim(gtd::sys sys, uint64_t batch_num, uint64_t num_in_batch) {
     rest:
     path.erase_chars(path.get_length() - 15);
     path.append_back("log.3bod");
-    gtd::f3bod<long double> file{path.c_str(), &sys, epochs + 1};
+    gtd::f3bodw<long double> file{path.c_str(), &sys, epochs + 1};
     file.add_entry();
     uint64_t counter = 1;
     if (nsys) {
@@ -105,6 +105,7 @@ void run_sim(gtd::sys sys, uint64_t batch_num, uint64_t num_in_batch) {
                 if (gtd::will_eject(sys)) {
                     log_ejection(sys, npath, epoch_len - 6, counter);
                     delete [] npath;
+                    file.remaining(0); // have to change the number of entries in the .3bod file, as evol. is cut short
                     return;
                 }
             }
@@ -119,6 +120,7 @@ void run_sim(gtd::sys sys, uint64_t batch_num, uint64_t num_in_batch) {
                 if (gtd::will_eject(sys)) {
                     // using const_cast<> ain't pretty, change this:
                     log_ejection(sys, const_cast<char*>(path.c_str()), path.get_length() - 9, counter);
+                    file.remaining(0);
                     return;
                 }
             }

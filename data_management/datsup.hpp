@@ -15,7 +15,9 @@
 #include <mutex>
 #include <condition_variable>
 
-#define EJ_FACTOR 10.0l // minimum ratio of largest distance between bodies to second largest required for ej. check
+#define EJ_FACTOR 8.0l // minimum ratio of largest distance between bodies to second largest required for ej. check
+
+#define F3BOD_SIZE(fltSize, numEpochs) (12 + 4*sizeof(long double) + 6*fltSize*(1 + 3*numEpochs))
 
 namespace gtd {
     std::pair<long double, long double> esc_vel_mags_com(long double m1, long double m2, long double sep) {
@@ -79,21 +81,6 @@ namespace gtd {
         if (ejbod->vel().magnitude() >= ev1 || other_two_com_vel.magnitude() >= ev2) // test both in case of round. err.
             return true;
         return false;
-        /*
-        long double d1 = (b1.pos() - b2.pos()).magnitude();
-        long double d2 = (b1.pos() - b3.pos()).magnitude();
-        long double d3 = (b2.pos() - b3.pos()).magnitude();
-        if (d1 > 10*d3) {
-
-        }
-        else if (d2 > 10*d3) {
-
-        }
-        else if (d3 > 10*d1) {
-
-        }
-        long double max = std::max({d1, d2, d3}); */
-
     }
     class not_3body_system_error : public std::logic_error {
     public:
@@ -118,11 +105,20 @@ namespace gtd {
     };
     class size_mismatch_error : public invalid_3bod_format {
     public:
-        size_mismatch_error() : std::logic_error{"Error: floating point data type size does not match \"sizeof(T)\".\n"}
+        size_mismatch_error() : invalid_3bod_format{"Error: floating point data type size does not match \"sizeof(T)\".\n"}
         {}
-        explicit size_mismatch_error(const char *msg) : std::logic_error{msg} {}
+        explicit size_mismatch_error(const char *msg) : invalid_3bod_format{msg} {}
     };
-    template <typename T = long double>
+    class iterator_index_error : public std::invalid_argument {
+    public:
+        iterator_index_error() :
+        std::invalid_argument{"Error: the required offset for indexing the iterator is out-of-bounds.\n"} {}
+        explicit iterator_index_error(const char *msg) : std::invalid_argument{msg} {}
+    };
+    template <isNumWrapper T, bool, bool>
+    requires (std::is_floating_point_v<T> && sizeof(T) <= 255 && sizeof(long double) < 127)
+    class f3bodr;
+    template <isNumWrapper T = long double>
     requires (std::is_floating_point_v<T> && sizeof(T) <= 255 && sizeof(long double) < 127)
     class f3bodw {
         std::ofstream *file; // pointer to `std::ofstream` object attached to same .3bod file for instance's lifespan
@@ -211,6 +207,11 @@ namespace gtd {
                 this->file->seekp(4 + sizeof(long double)); // seek to point in the file where I wrote the num. epochs
                 this->file->write((char *) &new_num, sizeof(uint64_t));
                 this->file->seekp(0, std::ios_base::end); // seek back to the end for further writing
+                if (!rem) { // close file if there are zero entries remaining to be added after tot. num. epochs changed
+                    file->close();
+                    delete file;
+                    file = nullptr;
+                }
             }
             return new_num;
         }
@@ -262,28 +263,394 @@ namespace gtd {
                 file->close();
             delete file;
         }
+        template <isNumWrapper U, bool, bool>
+        requires (std::is_floating_point_v<U> && sizeof(U) <= 255 && sizeof(long double) < 127)
+        friend class f3bodr;
+        friend class entry_it;
     };
-    template <typename T, bool alloc = true> // `alloc` dictates whether to store the entire contents in memory
+    // `alloc` dictates whether to store the entire contents in memory and `chk` whether to check iterator indexing
+    template <isNumWrapper T, bool alloc = true, bool bnd_chk = true>
     requires (std::is_floating_point_v<T> && sizeof(T) <= 255 && sizeof(long double) < 127)
     class f3bodr {
-        std::ifstream in;
-        typename f3bodw<T>::header hdr; // might consider removing this, as it involves unnecessary initialisation here
-        class entry_it { // iterator over entries
-            uint64_t tot;
-            typename f3bodw<T>::entry *_e{};
-        public:
-            entry_it(std::ifstream &_in, uint64_t tot_num) : tot{tot_num} {}
-        };
     public:
-        f3bodr(const char *path) : in{path, std::ios_base::in | std::ios_base::binary} {
+        using entry_type = typename f3bodw<T>::entry;
+    private:
+        template <bool _alloc = true, bool _chk = true> //not pretty, but I avoid declaring unnecessary member variables
+        class entry_it { // iterator over entries
+            uint64_t tot; // total number of iterations in .3bod file
+            entry_type *_arr; // array allocated to hold all positions and velocities at each iteration
+            entry_type *_ptr; // pointer to current entry within array
+            int64_t pos{}; // position of current entry within array
+            bool cpy = false; // boolean indicating whether `*this` has been copy constructed
+            // private ctor only for internal use:
+            entry_it(uint64_t _tot, entry_type *_array, entry_type *_entry, int64_t _pos, bool _copy) noexcept :
+            tot{_tot}, _arr{_array}, _ptr{_entry}, pos{_pos}, cpy{_copy} {}
+            entry_it begin_it() const noexcept {
+                return {tot, _arr, _arr, 0, true};
+            }
+            entry_it end_it() const noexcept {
+                return {tot, _arr, _arr + tot, tot, true};
+            }
+        public:
+            entry_it(std::ifstream &_in, uint64_t tot_num) : tot{tot_num} {
+                if (!_in.good())
+                    throw std::ios_base::failure{"Error: could not read from file.\n"};
+                this->_arr = new entry_type[tot_num];
+                _in.read((char *) this->_arr, sizeof(entry_type)*tot_num);
+                _ptr = _arr; // + `pos` is already zero
+            }
+            entry_it(entry_it &&other) noexcept : tot{other.tot}, _arr{other._arr}, _ptr{other._ptr}, pos{other.pos} {
+                other.tot = 0;
+                other._arr = nullptr;
+                other._ptr = nullptr;
+                other.pos = -1;
+                other.cpy = true;
+                // memory moved here, so `this->cpy` must remain false
+            }
+            entry_it(const entry_it &other) :
+                tot{other.tot}, _arr{other._arr}, _ptr{other._ptr}, pos{other.pos}, cpy{true} {}
+            int64_t position() const noexcept {
+                return this->pos;
+            }
+            const entry_type &operator*() const noexcept {
+                if constexpr (_chk)
+                    if (pos < 0 || pos >= tot) // cannot dereference `end()` iterator
+                        throw iterator_index_error{"Error: cannot dereference an out-of-bounds iterator.\n"};
+                return *_ptr;
+            }
+            entry_it operator++(int) noexcept(!_chk) {
+                if constexpr (_chk)
+                    if (pos >= tot) // not if equal to `tot - 1`: need an `end()` iterator
+                        throw iterator_index_error{};
+                entry_it _copy = *this;
+                ++_ptr;
+                ++pos;
+                return _copy;
+            }
+            entry_it &operator++() noexcept(!_chk) {
+                if constexpr (_chk)
+                    if (pos >= tot)
+                        throw iterator_index_error{};
+                ++_ptr;
+                ++pos;
+                return *this;
+            }
+            entry_it operator--(int) noexcept(!_chk) {
+                if constexpr (_chk)
+                    if (pos <= 0)
+                        throw iterator_index_error{};
+                entry_it _copy = *this;
+                --_ptr;
+                --pos;
+                return _copy;
+            }
+            entry_it &operator--() noexcept(!_chk) {
+                if constexpr (_chk)
+                    if (pos <= 0)
+                        throw iterator_index_error{};
+                --_ptr;
+                --pos;
+                return *this;
+            }
+            entry_it &operator=(const entry_it &other) {
+                if (&other == this)
+                    return *this;
+                this->tot = other.tot;
+                this->_arr = other._arr;
+                this->_ptr = other._ptr;
+                this->pos = other.pos;
+                this->cpy = true;
+                return *this;
+            }
+            entry_it &operator=(entry_it &&other) noexcept {
+                if (&other == this) // would be possible if `std::move` were used
+                    return *this;
+                this->tot = other.tot;
+                this->_arr = other._arr;
+                this->_ptr = other._ptr;
+                this->pos = other.pos;
+                this->cpy = false;
+                other.tot = 0;
+                other._arr = nullptr;
+                other._ptr = nullptr;
+                other.pos = -1;
+                other.cpy = true;
+                return *this;
+            }
+            ~entry_it() {
+                if (!cpy) // avoids attempting to deallocate the same memory twice, which is undefined behaviour
+                    delete [] this->_arr;
+            }
+            friend bool operator==(const entry_it &it1, const entry_it &it2) {
+                // not checking other members as only two iterators pointing to same array could point to same address:
+                return it1._ptr == it2._ptr;
+            }
+            friend bool operator!=(const entry_it &it1, const entry_it &it2) {
+                return it1._ptr != it2._ptr;
+            }
+            friend bool operator>(const entry_it &it1, const entry_it &it2) {
+                return it1._ptr > it2._ptr;
+            }
+            friend bool operator<(const entry_it &it1, const entry_it &it2) {
+                return it1._ptr < it2._ptr;
+            }
+            friend bool operator>=(const entry_it &it1, const entry_it &it2) {
+                return it1._ptr >= it2._ptr;
+            }
+            friend bool operator<=(const entry_it &it1, const entry_it &it2) {
+                return it1._ptr <= it2._ptr;
+            }
+            friend bool operator+(const entry_it &it1, int64_t offset) {
+                if constexpr (_chk) {
+                    int64_t new_pos = it1.pos + offset;
+                    if (new_pos < 0 || new_pos > it1.tot)
+                        throw iterator_index_error{};
+                    return {it1.tot, it1._arr, it1._ptr + offset, new_pos, it1.cpy};
+                }
+                return {it1.tot, it1._arr, it1._ptr + offset, it1.pos + offset, it1.cpy};
+            }
+            friend bool operator+(int64_t offset, const entry_it &it1) {
+                if constexpr (_chk) {
+                    int64_t new_pos = it1.pos + offset;
+                    if (new_pos < 0 || new_pos > it1.tot)
+                        throw iterator_index_error{};
+                    return {it1.tot, it1._arr, it1._ptr + offset, new_pos, it1.cpy};
+                }
+                return {it1.tot, it1._arr, it1._ptr + offset, it1.pos + offset, it1.cpy};
+            }
+            friend bool operator-(const entry_it &it1, int64_t offset) {
+                if constexpr (_chk) {
+                    int64_t new_pos = it1.pos - offset;
+                    if (new_pos < 0 || new_pos > it1.tot)
+                        throw iterator_index_error{};
+                    return {it1.tot, it1._arr, it1._ptr - offset, new_pos, it1.cpy};
+                }
+                return {it1.tot, it1._arr, it1._ptr - offset, it1.pos - offset, it1.cpy};
+            }
+            friend bool operator-(int64_t offset, const entry_it &it1) {
+                if constexpr (_chk) {
+                    int64_t new_pos = it1.pos - offset;
+                    if (new_pos < 0 || new_pos > it1.tot)
+                        throw iterator_index_error{};
+                    return {it1.tot, it1._arr, it1._ptr - offset, new_pos, it1.cpy};
+                }
+                return {it1.tot, it1._arr, it1._ptr - offset, it1.pos - offset, it1.cpy};
+            }
+        };
+        template <bool _chk>
+        class entry_it<false, _chk> {
+            uint64_t tot;
+            std::ifstream in; // the position of the pointer within the stream is always one entry ahead of `pos`
+            entry_type _e;
+            entry_type *_ptr = _e; // is always pointer to `_e`, except when iterator is `end()` (then `nullptr`)
+            int64_t pos{}; // `pos` gives the index of the entry `_e` within the .3bod file
+            const char *fname; // need filename to make class copyable (`std::ifstream` objects cannot be copied)
+            entry_it(uint64_t _tot, const char *path, int64_t _pos) :
+            tot{_tot}, in{path, std::ios_base::in | std::ios_base::binary}, _e{}, _ptr{&_e}, pos{_pos},
+            fname{path} {
+                if (!in.good())
+                    throw std::ios_base::failure{"Error: failure to read from file provided.\n"};
+                if (pos != tot) { // no need to check for greater than as this is a private ctor
+                    in.seekg(sizeof(f3bodw<T>::header) + pos*sizeof(entry_type));
+                    in.read((char *) &_e, sizeof(entry_type));
+                }
+                else {
+                    // deal with `end()` iterator here
+                }
+            }
+            entry_it begin_it() const noexcept {
+                return {fname, tot};
+            }
+            entry_it end_it() const noexcept {
+                return {tot, fname, tot};
+            }
+        public:
+            // using entry_type = typename f3bodw<T>::entry;
+            entry_it(const char *path, uint64_t _tot) :
+                tot{_tot}, in{path, std::ios_base::in | std::ios_base::binary}, fname{path} {
+                if (!in.good())
+                    throw std::ios_base::failure{"Error reading from .3bod file.\n"};
+                in.seekg(sizeof(f3bodw<T>::header)); // seek to offset of where array of pos./vel. starts
+                in.read((char *) &_e, sizeof(entry_type)); // read in first entry
+            }
+            entry_it(entry_it &&other) : tot{other.tot}, in{std::move(other.in)}, _e{other._e}, _ptr{&_e},
+            pos{other.pos}, fname{other.fname} { // not marked `noexcept` because `std::ifstream` move ctor isn't either
+                other._ptr = nullptr;
+                other.pos = -1;
+                other.fname = nullptr;
+            }
+            int64_t position() const noexcept {
+                return this->pos;
+            }
+            const entry_type &operator*() const noexcept {
+                if constexpr (_chk)
+                    if (pos < 0 || pos >= tot) // cannot dereference `end()` iterator
+                        throw iterator_index_error{"Error: cannot dereference an out-of-bounds iterator.\n"};
+                return *_ptr; // causes seg. fault if `_chk` is `false` and iterator is `end()` iterator
+            }
+            entry_it operator++(int) noexcept(!_chk) {
+                entry_it _copy = *this;
+                this->operator++();
+                return _copy;
+            }
+            entry_it &operator++() noexcept(!_chk) {
+                if constexpr (_chk) {
+                    if (pos >= tot) // not if equal to `tot - 1`: need an `end()` iterator
+                        throw iterator_index_error{};
+                    if (pos == tot - 1)
+                        _ptr = nullptr; // no further element, so must be `nullptr`
+                    else {
+                        _ptr = _e;
+                        in.read((char *) &_e, sizeof(entry_type));
+                    }
+                    ++pos;
+                    return *this;
+                }
+                in.read((char *) &_e, sizeof(entry_type));
+                ++pos;
+                return *this;
+            }
+            entry_it operator--(int) noexcept(!_chk) {
+                entry_it _copy = *this;
+                this->operator--();
+                return _copy;
+            }
+            entry_it &operator--() noexcept(!_chk) {
+                if constexpr (_chk) {
+                    if (pos <= 0) // not if equal to `tot - 1`: need an `end()` iterator
+                        throw iterator_index_error{};
+                    _ptr = _e; // in case `*this` was the `end()` iterator
+                }
+                in.seekg(-2*sizeof(entry_type), std::ios_base::cur);
+                in.read((char *) &_e, sizeof(entry_type));
+                --pos;
+                return *this;
+            }
+            entry_it &operator=(const entry_it &other) {
+                if (&other == this)
+                    return *this;
+                this->tot = other.tot;
+                this->in.close();
+                this->fname = other.fname;
+                this->in.open(this->fname, std::ios_base::in | std::ios_base::binary);
+                this->in.seekg(sizeof(f3bodw<T>::header) + (other.pos + 1)*sizeof(entry_type));
+                this->_e = other._e;
+                if constexpr (_chk)
+                    this->_ptr = &_e; // inside `if constexpr` because `_ptr` could only be null if bound-checking done
+                this->pos = other.pos;
+            }
+            entry_it &operator=(entry_it &&other) {
+                if (&other == this)
+                    return *this;
+                this->tot = other.tot;
+                this->_e = other._e;
+                if constexpr (_chk)
+                    this->_ptr = &_e;
+                this->in = std::move(other.in);
+                this->pos = other.pos;
+                this->fname = other.fname;
+                other.fname = nullptr;
+                other.tot = 0;
+                other._ptr = nullptr;
+                other.pos = -1;
+                return *this;
+            }
+            ~entry_it() {
+                if (in.is_open()) // in case `*this` was moved
+                    in.close();
+            }
+            // All comparison functions return `false` (apart from `operator!=`) if the iterators point to diff. files
+            friend bool operator==(const entry_it &it1, const entry_it &it2) {
+                // not checking other members as only two iterators pointing to same array could point to same address:
+                return it1.pos == it2.pos && !gtd::strcmp_c(it1.fname, it2.fname); // IMPROVE THIS, USE IDS OR HASHING
+            }
+            friend bool operator!=(const entry_it &it1, const entry_it &it2) {
+                return it1.pos != it2.pos && gtd::strcmp_c(it1.fname, it2.fname); // thank god for short-circuit eval...
+            }
+            friend bool operator>(const entry_it &it1, const entry_it &it2) {
+                return it1.pos > it2.pos && !gtd::strcmp_c(it1.fname, it2.fname);
+            }
+            friend bool operator<(const entry_it &it1, const entry_it &it2) {
+                return it1.pos < it2.pos && !gtd::strcmp_c(it1.fname, it2.fname);
+            }
+            friend bool operator>=(const entry_it &it1, const entry_it &it2) {
+                return it1.pos >= it2.pos && !gtd::strcmp_c(it1.fname, it2.fname);
+            }
+            friend bool operator<=(const entry_it &it1, const entry_it &it2) {
+                return it1.pos <= it2.pos && !gtd::strcmp_c(it1.fname, it2.fname);
+            }
+            friend bool operator+(const entry_it &it1, int64_t offset) {
+                if constexpr (_chk) {
+                    int64_t new_pos = it1.pos + offset;
+                    if (new_pos < 0 || new_pos > it1.tot)
+                        throw iterator_index_error{};
+                    return {it1.tot, it1.fname, new_pos};
+                }
+                return {it1.tot, it1.fname, it1.pos + offset};
+            }
+            friend bool operator+(int64_t offset, const entry_it &it1) {
+                if constexpr (_chk) {
+                    int64_t new_pos = it1.pos + offset;
+                    if (new_pos < 0 || new_pos > it1.tot)
+                        throw iterator_index_error{};
+                    return {it1.tot, it1.fname, new_pos};
+                }
+                return {it1.tot, it1.fname, it1.pos + offset};
+            }
+            friend bool operator-(const entry_it &it1, int64_t offset) {
+                if constexpr (_chk) {
+                    int64_t new_pos = it1.pos - offset;
+                    if (new_pos < 0 || new_pos > it1.tot)
+                        throw iterator_index_error{};
+                    return {it1.tot, it1.fname, new_pos};
+                }
+                return {it1.tot, it1.fname, it1.pos - offset};
+            }
+            friend bool operator-(int64_t offset, const entry_it &it1) {
+                if constexpr (_chk) {
+                    int64_t new_pos = it1.pos - offset;
+                    if (new_pos < 0 || new_pos > it1.tot)
+                        throw iterator_index_error{};
+                    return {it1.tot, it1.fname, new_pos};
+                }
+                return {it1.tot, it1.fname, it1.pos - offset};
+            }
+        };
+        typename f3bodw<T>::header hdr; // might consider removing this, as it involves unnecessary initialisation here
+        entry_it<alloc, bnd_chk> _it;
+        uint64_t file_size;
+    public:
+        explicit f3bodr(const char *path) {
             struct stat buff{};
             if (stat(path, &buff) == -1)
                 throw std::invalid_argument{"Error: .3bod file provided does not exist.\n"};
             if (!S_ISREG(buff.st_mode))
                 throw std::invalid_argument{"Error: .3bod file provided is not a regular file.\n"};
-
+            if (buff.st_size < sizeof(f3bodw<T>::header))
+                throw invalid_3bod_format{"Error: .3bod format invalid (at least for current type 'T'.\n"};
+            std::ifstream in{path, std::ios_base::in | std::ios_base::binary};
+            in.read((char *) hdr, sizeof(f3bodw<T>::header));
+            if (hdr.hd[0] != '3' || hdr.hd[1] != 'B')
+                throw invalid_3bod_format{"Error: invalid .3bod header.\n"};
+            if (hdr.flt_size != sizeof(T))
+                throw invalid_3bod_format{"Error: reported size of f.p. data type does not match \"sizeof(T)\".\n"};
+            if ((hdr.lds_coll >> 1) != sizeof(long double))
+                throw invalid_3bod_format{"Error: reported size of a \"long double\" does not match "
+                                          "\"sizeof(long double)\".\n"};
+            if (buff.st_size != (file_size = F3BOD_SIZE(sizeof(T), hdr.N)))
+                throw invalid_3bod_format{"Error: invalid total file size.\n"};
+            if constexpr (alloc) {
+                // construct `_it` from reference to `in`, as `_it` will only use it once to read in entire array
+                _it = entry_it<alloc, bnd_chk>{in, hdr.N};
+            }
+            else {
+                // construct `_it` from `path`, since `_it` will construct its own `std::ifstream` and keep that
+                // shut in before constructing new `entry_it` instance
+            }
+            in.close();
         }
     };
+
     // Here I define a trivial class used to compare two `std::thread` objects, such that `std::thread` objects can be
     // added to an `std::set`, where the `Compare` type is set to `thread_comparator`:
     class thread_comparator {
