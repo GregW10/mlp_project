@@ -14,6 +14,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <iomanip>
 
 #define EJ_FACTOR 8.0l // minimum ratio of largest distance between bodies to second largest required for ej. check
 
@@ -42,7 +43,7 @@ namespace gtd {
         T squared_p1 = 1 + sig_over_mu*sig_over_mu;
         return {logl(mu_ln/sqrtl(squared_p1)), sqrtl(logl(squared_p1))};
     }
-    bool will_eject(const gtd::sys &sys) {
+    bool will_eject(const gtd::sys &sys, long double ej_factor) {
         if (sys.num_bodies() != 3)
             throw std::invalid_argument{"Error: system object passed must have 3 bodies.\n"};
         const gtd::bod_0f &b1 = sys[0];
@@ -50,28 +51,50 @@ namespace gtd {
         const gtd::bod_0f &b3 = sys[2];
         const gtd::vec3 p1 = b1.pos();
         const gtd::vec3 p2 = b2.pos();
-        const gtd::vec3 p3 = b2.pos();
-        long double d1 = p1.magnitude();
-        long double d2 = p2.magnitude();
-        long double d3 = p3.magnitude();
+        const gtd::vec3 p3 = b3.pos();
+        long double d12 = (p1 - p2).magnitude();
+        long double d13 = (p1 - p3).magnitude();
+        long double d23 = (p2 - p3).magnitude();
+        long double ej_d12 = ej_factor*d12;
+        long double ej_d13 = ej_factor*d13;
+        long double ej_d23 = ej_factor*d23;
         const gtd::bod_0f *ejbod;
         const gtd::bod_0f *rbod1;
         const gtd::bod_0f *rbod2;
-        if (d1 > EJ_FACTOR*std::max(d2, d3)) {
+        if (d12 > ej_d23 && d13 > ej_d23) {
             ejbod = &b1;
             rbod1 = &b2;
             rbod2 = &b3;
-        } else if (d2 > EJ_FACTOR*std::max(d1, d3)) {
-            ejbod = &b2;
-            rbod1 = &b1;
-            rbod2 = &b3;
-        } else if (d3 > EJ_FACTOR*std::max(d1, d2)) {
+        } else if (d13 > ej_d12 && d23 > ej_d12) {
             ejbod = &b3;
             rbod1 = &b1;
             rbod2 = &b2;
-        }
-        else
-            return false;
+        } else if (d12 > ej_d13 && d23 > ej_d13) {
+            ejbod = &b2;
+            rbod1 = &b1;
+            rbod2 = &b3;
+        } else
+            return false; /*
+        long double d1 = p1.magnitude();
+        long double d2 = p2.magnitude();
+        long double d3 = p3.magnitude();
+        if (d1 > ej_factor*std::max(d2, d3)) {
+            std::cout << "d1: " << d1 << ", max: " << std::max(d2, d3) << std::endl;
+            ejbod = &b1;
+            rbod1 = &b2;
+            rbod2 = &b3;
+        } else if (d2 > ej_factor*std::max(d1, d3)) {
+            std::cout << "d2: " << d2 << ", max: " << std::max(d1, d3) << std::endl;
+            ejbod = &b2;
+            rbod1 = &b1;
+            rbod2 = &b3;
+        } else if (d3 > ej_factor*std::max(d1, d2)) {
+            std::cout << "d3: " << d3 << ", max: " << std::max(d1, d2) << std::endl;
+            ejbod = &b3;
+            rbod1 = &b1;
+            rbod2 = &b2;
+        } else
+            return false; */
         auto [ev1, ev2] = esc_vel_mags_com(ejbod->mass(), // mass of possibly ejected body
                                            (rbod1->mass() + rbod2->mass()), // total mass of other two bodies
                                            // distance between the pos. ej. body and the COM of the other two:
@@ -155,7 +178,7 @@ namespace gtd {
         }
         void write_header() {
             header hdr{};
-            hdr.dt = sys->timestep();
+            hdr.dt = sys->timestep()*sys->iters();
             hdr.N = this->_epochs;
             T *ptr = hdr.masses;
             for (const auto &b : *this->sys)
@@ -484,11 +507,14 @@ namespace gtd {
             fname{path} {
                 if (!in.good())
                     throw std::ios_base::failure{"Error: failure to read from file provided.\n"};
-                if (pos < tot) { // no need to check for greater than as this is a private ctor
+                if (pos < tot) {
                     in.seekg(sizeof(hdr_t) + pos*sizeof(entry_type));
                     in.read((char *) &_e, sizeof(entry_type));
                 }
-                else {
+                else { /*
+                    if constexpr (_chk)
+                        if (pos > tot)
+                            throw iterator_index_error{}; */
                     in.seekg(0, std::ios_base::end).setstate(std::ios_base::eofbit);
                     _ptr = nullptr;
                 }
@@ -626,7 +652,7 @@ namespace gtd {
                 this->pos = other.pos;
                 return *this;
             }
-            entry_it &operator=(entry_it &&other) noexcept {
+            entry_it &operator=(entry_it &&other) { // cannot be marked `noexcept` as `std::ifstream::operator=` isn't
                 if (&other == this)
                     return *this;
                 this->tot = other.tot;
@@ -647,6 +673,10 @@ namespace gtd {
             void stop() {
                 if (in.is_open())
                     in.close();
+                this->tot = 0;
+                this->fname = nullptr;
+                this->_ptr = nullptr;
+                this->pos = -1;
             }
             ~entry_it() {
                 if (in.is_open()) // in case `*this` was moved
