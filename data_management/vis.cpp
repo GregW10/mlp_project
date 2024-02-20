@@ -50,18 +50,34 @@ int main(int argc, char **argv) {
         free_path = true;
     }
     std::cout << "\033[1m\033[37mFile: \033[0m\033[32m\"\033[33m" << fpath << "\033[32m\"" << std::endl;
+    // Maybe manually open file here first to check its integrity
     try {
-        gtd::f3bodr<long double> reader{fpath};
-        // print entries
+        try {
+            gtd::f3bodr<long double> reader{fpath};
+            // print entries
+        }
+        catch (const gtd::invalid_3bod_ld_size&) {
+            std::cerr << BOLD_TXT(MAGENTA_TXT("Error: ")) YELLOW_TXT(" \"sizeof(long double)\" does not match that "
+                                                                     "reported in the .3bod file.\n");
+            return 1;
+        }
+        catch (const gtd::invalid_3bod_T_size&) {
+            try {
+                gtd::f3bodr<double> reader{fpath};
+            } catch (const gtd::invalid_3bod_T_size&) {
+                try {
+                    gtd::f3bodr<float> reader{fpath};
+                } catch (const gtd::invalid_3bod_T_size&) {
+                    std::cerr << "Error: reported floating point data type size does not match the size of a "
+                                 "\"long double\", \"double\" or \"float\".\n";
+                    return 1;
+                }
+            }
+        }
     }
     catch (const gtd::invalid_3bod_format &e) {
-
-    }
-    catch (const gtd::invalid_3bod_ld_size&) {
-
-    }
-    catch (const gtd::invalid_3bod_T_size&) {
-
+        std::cerr << BOLD_TXT(MAGENTA_TXT("Error: ")) YELLOW_TXT("invalid .3bod format.\n");
+        return 1;
     }
     if (free_path)
         delete [] fpath;

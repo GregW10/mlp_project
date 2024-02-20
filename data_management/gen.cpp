@@ -27,6 +27,8 @@ long double dte;
 // bool verbose;
 bool nsys;
 
+uint64_t ejected = 0; // number of bodies ejected - only used if ejection detection is enabled
+
 void log_ejection(const gtd::sys &sys, char *path, uint64_t zero_index, uint64_t counter) {
     std::lock_guard<std::mutex> wguard{worker_mutex};
     *(path + zero_index) = 0;
@@ -39,6 +41,7 @@ void log_ejection(const gtd::sys &sys, char *path, uint64_t zero_index, uint64_t
                   << " m/s^2\n";
     std::cerr << "----------------\n";
     --running;
+    ++ejected;
     cv.notify_one();
 }
 
@@ -253,7 +256,7 @@ void main_loop(long double box_x, long double box_y, long double box_z, long dou
         for (gtd::bod_0f &bod : sys)
             bod.vel() *= final_scaling;
         if constexpr (tscale) {
-            long double factor = (dts*triple_mass)/powl(sys[0].mass() + sys[1].mass() + sys[2].mass(), dte);
+            long double factor = dts*powl(triple_mass/(sys[0].mass() + sys[1].mass() + sys[2].mass()), dte);
             sys.timestep(factor*dt);
             sys.iters((uint64_t) ceill(((long double) iters)/factor));
         }
@@ -289,7 +292,7 @@ void main_loop(long double box_x, long double box_y, long double box_z, long dou
         if constexpr (verbose) {
             if constexpr (tty)
                 std::cout << "\033[38;5;117mEvolution \033[1m\033[38;5;10m" << counter << "\033[38;5;11m/\033[38;5;10m"
-                          << evols << " \033[0m\033[38;5;117mdispatched." << std::endl;
+                          << evols << " \033[0m\033[38;5;117mdispatched.\033[0m" << std::endl;
             else
                 std::cout << "Evolution " << counter << '/' << evols << " dispatched." << std::endl;
         }
@@ -316,15 +319,14 @@ int main(int argc, char **argv) {
     // would violate the conservation of energy (assuming they all start out with tot_KE < tot_PE).
     bool verbose = parser.get_arg("-v", false) | parser.get_arg("--verbose", false); // for verbose output
     nsys = parser.get_arg("-n", false) | parser.get_arg("--output_nsys", false); // for nsys files too
-    evols = parser.get_arg("--evolutions", 100'000ull); // number of evolutions to simulate
+    evols = parser.get_arg("--evolutions", 1'000ull); // number of evolutions to simulate
     bool tty = isatty(STDOUT_FILENO); // if connected to a terminal, output colours, if not, don't
-    if (!evols) {
+    if (!evols)
         log_error("cannot have zero evolutions.", tty);
-    }
     epochs = parser.get_arg("--epochs", 10'000ull); // number of simulation epochs to write per evolution
     if (!epochs)
         log_error("cannot have zero epochs per evolution.", tty);
-    uint64_t iters = parser.get_arg("--iterations", 1'000'000ull); // number of iterations per epoch
+    uint64_t iters = parser.get_arg("--iterations", 100'000ull); // number of iterations per epoch
     if (!iters)
         log_error("cannot have zero iterations per epoch.", tty);
     // Number of different mean masses to use:
@@ -337,7 +339,7 @@ int main(int argc, char **argv) {
     const long double start_mass = parser.get_arg("--starting_mass", 1'000.0l); // starting mean mass value
     if (start_mass <= 0)
         log_error("starting mass must be positive.", tty);
-    const long double mass_step = parser.get_arg("--mass_step", TRILLION/(num_m - 1)); // step in mean mass value
+    const long double mass_step = parser.get_arg("--mass_step", start_mass/10); // step in mean mass value
     if (mass_step <= 0)
         log_error("mass step must be positive.", tty);
     const long double mass_sd_scaling = parser.get_arg("--mass_sd_scaling", 0.125l); // mass_SD = scaling*mean_mass
@@ -348,7 +350,7 @@ int main(int argc, char **argv) {
     const long double radius = parser.get_arg("--radius", 0.0l);
     if (radius < 0)
         log_error("radius cannot be negative.", tty);
-    const long double dt = parser.get_arg("--timestep", 1.0l/pow(2, 16)); // time-step used to evolve simulations
+    const long double dt = parser.get_arg("--timestep", 1.0l/pow(2, 24)); // time-step used to evolve simulations
     if (dt <= 0)
         log_error("time-step must be positive.", tty);
     bool tscale = !parser.get_arg("--no_timestep_scaling", false);
@@ -432,6 +434,11 @@ int main(int argc, char **argv) {
                          "cause termination of the ""simulation.\nConsider choosing a smaller radius.\n";
     }
     const char *apath = parser.get_arg("-o");
+    unsigned int max_num_threads = std::thread::hardware_concurrency();
+    max_num_threads = max_num_threads ? max_num_threads : 1; // single-thread execution if value is not computable
+    unsigned int numt = parser.get_arg("--threads", max_num_threads);
+    if (!numt || numt > max_num_threads) // user-defined value cannot be zero or over the max. num. of conc. threads
+        numt = max_num_threads;
     if (!parser.empty()) {
         if (tty) {
             std::cerr << BOLD_TXT(RED_TXT("Error!")) YELLOW_TXT(" Unrecognised arguments:") "\n";
@@ -446,8 +453,6 @@ int main(int argc, char **argv) {
         }
         return 1;
     }
-    unsigned int numt = std::thread::hardware_concurrency();
-    numt = numt ? numt : 1; // single-thread execution if number could not be determined
     if (verbose) {
         if (tty)
             std::cout << "\033[38;5;123mNumber of concurrent simulation threads to run: \033[1m\033[38;5;11m" << numt
@@ -622,8 +627,11 @@ int main(int argc, char **argv) {
     }
     if (tty)
         std::cout << "\033[1m\033[38;5;21m------------------------\nAll evolutions finished.\n------------------------"
-                  << std::endl;
+                     "\n" BOLD_TXT_START MAGENTA_TXT_START << ejected << RESET_TXT_FLAGS BLUE_TXT_START " out of "
+                     BOLD_TXT_START MAGENTA_TXT_START << evols
+                  << RESET_TXT_FLAGS BLUE_TXT_START " evolutions resulted in an ejection.\n";
     else
-        std::cout << "------------------------\nAll evolutions finished.\n------------------------" << std::endl;
+        std::cout << "------------------------\nAll evolutions finished.\n------------------------\n" << ejected
+                  << " out of " << evols << " evolutions resulted in an ejection.\n";
     return 0;
 }
