@@ -391,7 +391,7 @@ int main(int argc, char **argv) {
     // Note: the box is always centered around the COM, so centre coordinates are never supplied as an argument
     if (box_z <= 0)
         log_error("box height must be positive.", tty);
-    const long double eps = parser.get_arg("--softening", 1.0l/65'536.0l); // softening length
+    const long double eps = parser.get_arg("--softening", 1.0l/powl(2, 25)); // softening length
     if (eps < 0)
         log_error("softening-length must be non-negative.", tty);
     // The "minimum separation" is the minimum starting separation the bodies have to have:

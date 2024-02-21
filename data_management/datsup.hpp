@@ -779,7 +779,7 @@ namespace gtd {
                 _it = entry_it<alloc, bnd_chk>{path, hdr.N};
             }
         }
-        hdr_t header() const noexcept {
+        const hdr_t &header() const noexcept {
             return this->hdr;
         }
         const entry_type &entry_at(uint64_t index) const noexcept {
