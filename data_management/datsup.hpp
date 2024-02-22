@@ -500,8 +500,8 @@ namespace gtd {
             entry_type _e;
             entry_type *_ptr = &_e; // is always pointer to `_e`, except when iterator is `end()` (then `nullptr`)
             int64_t pos{}; // `pos` gives the index of the entry `_e` within the .3bod file
-            const char *fname; // need filename to make class copyable (`std::ifstream` objects cannot be copied)
-            entry_it() : tot{0}, _ptr{nullptr}, fname{nullptr} {}
+            std::string fname; // need filename to make class copyable (`std::ifstream` objects cannot be copied)
+            entry_it() : tot{0}, _ptr{nullptr} /*, fname{nullptr} */ {}
             entry_it(uint64_t _tot, const char *path, int64_t _pos) :
             tot{_tot}, in{path, std::ios_base::in | std::ios_base::binary}, _e{}, _ptr{&_e}, pos{_pos},
             fname{path} {
@@ -546,11 +546,11 @@ namespace gtd {
                     _ptr = nullptr;
                 }
             }
-            entry_it(entry_it &&other) : tot{other.tot}, in{std::move(other.in)}, _e{other._e}, _ptr{&_e},
-            pos{other.pos}, fname{other.fname} { // not marked `noexcept` because `std::ifstream` move ctor isn't either
+            entry_it(entry_it &&other) : tot{other.tot}, in{std::move(other.in)}, _e{other._e},_ptr{&_e},pos{other.pos},
+            fname{std::move(other.fname)} { // not marked `noexcept` because `std::ifstream` move ctor isn't either
                 other._ptr = nullptr;
                 other.pos = -1;
-                other.fname = nullptr;
+                // other.fname = nullptr;
             }
             int64_t position() const noexcept {
                 return this->pos;
@@ -663,8 +663,8 @@ namespace gtd {
                     this->_ptr = &_e;
                 this->in = std::move(other.in);
                 this->pos = other.pos;
-                this->fname = other.fname;
-                other.fname = nullptr;
+                this->fname = std::move(other.fname);
+                // other.fname = nullptr;
                 other.tot = 0;
                 other._ptr = nullptr;
                 other.pos = -1;
@@ -674,33 +674,37 @@ namespace gtd {
                 if (in.is_open())
                     in.close();
                 this->tot = 0;
-                this->fname = nullptr;
+                // this->fname = nullptr;
+                this->fname.clear();
+                this->fname.shrink_to_fit();
                 this->_ptr = nullptr;
                 this->pos = -1;
             }
             ~entry_it() {
                 if (in.is_open()) // in case `*this` was moved
                     in.close();
+                // this->fname.clear();
+                // this->fname.shrink_to_fit();
             }
             // All comparison functions return `false` (apart from `operator!=`) if the iterators point to diff. files
             friend bool operator==(const entry_it &it1, const entry_it &it2) {
                 // not checking other members as only two iterators pointing to same array could point to same address:
-                return it1.pos == it2.pos && !gtd::strcmp_c(it1.fname, it2.fname); // IMPROVE THIS, USE IDS OR HASHING
+                return it1.pos == it2.pos && it1.fname == it2.fname; // IMPROVE THIS, USE IDS OR HASHING
             }
             friend bool operator!=(const entry_it &it1, const entry_it &it2) {
-                return it1.pos != it2.pos || gtd::strcmp_c(it1.fname, it2.fname); // thank god for short-circuit eval...
+                return it1.pos != it2.pos || it1.fname == it2.fname; // thank god for short-circuit eval...
             }
             friend bool operator>(const entry_it &it1, const entry_it &it2) {
-                return it1.pos > it2.pos && !gtd::strcmp_c(it1.fname, it2.fname);
+                return it1.pos > it2.pos && it1.fname == it2.fname;
             }
             friend bool operator<(const entry_it &it1, const entry_it &it2) {
-                return it1.pos < it2.pos && !gtd::strcmp_c(it1.fname, it2.fname);
+                return it1.pos < it2.pos && it1.fname == it2.fname;
             }
             friend bool operator>=(const entry_it &it1, const entry_it &it2) {
-                return it1.pos >= it2.pos && !gtd::strcmp_c(it1.fname, it2.fname);
+                return it1.pos >= it2.pos && it1.fname == it2.fname;
             }
             friend bool operator<=(const entry_it &it1, const entry_it &it2) {
-                return it1.pos <= it2.pos && !gtd::strcmp_c(it1.fname, it2.fname);
+                return it1.pos <= it2.pos && it1.fname == it2.fname;
             }
             friend entry_it operator+(const entry_it &it1, int64_t offset) {
                 if constexpr (_chk) {
