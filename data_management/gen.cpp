@@ -110,7 +110,7 @@ void run_sim(gtd::sys sys, uint64_t batch_num, uint64_t num_in_batch) {
         while (counter <= epochs) {
             sys.evolve();
             file.add_entry();
-            val = counter++;
+            val = counter;
             ptr = last_digit;
             while (val > 0) {
                 *ptr-- = (val % 10) + 48;
@@ -126,11 +126,12 @@ void run_sim(gtd::sys sys, uint64_t batch_num, uint64_t num_in_batch) {
                     return;
                 }
             }
+            ++counter;
         }
         delete [] npath;
     }
     else {
-        while (counter++ <= epochs) {
+        while (counter <= epochs) {
             sys.evolve();
             file.add_entry();
             if constexpr (check_ejection) {
@@ -141,6 +142,7 @@ void run_sim(gtd::sys sys, uint64_t batch_num, uint64_t num_in_batch) {
                     return;
                 }
             }
+            ++counter;
         }
     }
     std::lock_guard<std::mutex> guard{worker_mutex}; // acquire worker mutex to stop other workers from red. `running`
@@ -528,7 +530,8 @@ int main(int argc, char **argv) {
             std::cout << "Writing configurations to \"" << path << "\" file..." << std::endl;
     }
     logf << std::boolalpha
-         << "Distinct evolutions = " << evols << "\nEpochs per evolution = " << epochs << "\nIterations per epoch = "
+         << "Filename: " << path
+         << "\nDistinct evolutions = " << evols << "\nEpochs per evolution = " << epochs << "\nIterations per epoch = "
          << iters << "\nNumber of mass means = " << num_m << "\nStarting mean mass = " << start_mass
          << " kg\nStep in mean mass = " << mass_step << " kg\nSD fraction of mean = " << mass_sd_scaling
          << "\nRadius of bodies = " << radius << " m\nTime-step = " << dt
@@ -540,7 +543,7 @@ int main(int argc, char **argv) {
     logf << "\nVelocity scaling factor = " << vel_scale
          << "\nBox length along x = " << box_x << " m\nBox length along y = " << box_y << " m\nBox length along z = "
          << box_z << " m\nSoftening length = " << eps << " m\nDefault min. sep. = " << min_sep_def
-         << " m\nActual min. sep. = " << min_sep << " m\nEarly stopping = " << e_stop
+         << " m\nActual min. sep. = " << min_sep << " m\nEjection factor = " << ejf << "\nEarly stopping = " << e_stop
          << "\nVerbose output = " << verbose << "\nOutput nsys = " << nsys << "\nNumber of parallel simulations = "
          << numt << '\n';
     if (verbose) {

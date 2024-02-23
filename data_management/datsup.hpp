@@ -355,6 +355,12 @@ namespace gtd {
                         throw iterator_index_error{"Error: cannot dereference an out-of-bounds iterator.\n"};
                 return *_ptr;
             }
+            const entry_type *operator->() const noexcept(!_chk) {
+                if constexpr (_chk)
+                    if (pos < 0 || pos >= tot)
+                        throw iterator_index_error{"Error: cannot dereference an out-of-bounds iterator.\n"};
+                return _ptr;
+            }
             const entry_type &at(uint64_t index) const noexcept(!_chk) {
                 if constexpr (_chk)
                     if (index >= tot)
@@ -569,6 +575,19 @@ namespace gtd {
                         throw iterator_index_error{"Error: cannot dereference an out-of-bounds iterator.\n"};
                 return (entry = *_ptr); // maybe change to `_e`, but almost want to keep UB for when `*this` is `end()`
             }
+            const entry_type *operator->() const& noexcept(!_chk) {
+                if constexpr (_chk)
+                    if (pos < 0 || pos >= tot)
+                        throw iterator_index_error{"Error: cannot dereference an out-of-bounds iterator.\n"};
+                return _ptr;
+            }
+            const entry_type *operator->() const&& noexcept(!_chk) {
+                static entry_type entry;
+                if constexpr (_chk)
+                    if (pos < 0 || pos >= tot)
+                        throw iterator_index_error{"Error: cannot dereference an out-of-bounds iterator.\n"};
+                return &(entry = *_ptr);
+            }
             const entry_type &at(uint64_t index) const { // consider changing this to return by value
                 /* CURRENTLY NOT THREAD-SAFE */
                 if constexpr (_chk)
@@ -692,7 +711,7 @@ namespace gtd {
                 return it1.pos == it2.pos && it1.fname == it2.fname; // IMPROVE THIS, USE IDS OR HASHING
             }
             friend bool operator!=(const entry_it &it1, const entry_it &it2) {
-                return it1.pos != it2.pos || it1.fname == it2.fname; // thank god for short-circuit eval...
+                return it1.pos != it2.pos || it1.fname != it2.fname; // thank god for short-circuit evaluation
             }
             friend bool operator>(const entry_it &it1, const entry_it &it2) {
                 return it1.pos > it2.pos && it1.fname == it2.fname;
