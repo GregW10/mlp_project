@@ -10,21 +10,11 @@
 #endif
 
 #define VIEW_HEADER R"(^h$)"
-#define VIEW_ALL R"(^v-p?v?a?c?e?$)"
-#define VIEW_RANGE R"(^v-p?v?a?c?e?:\d{1,18}-\d{1,18}$)"
-#define VIEW_ENTRY R"(^v-p?v?a?c?e?:\d{1,18}$)"
+#define VIEW_ALL R"(^v-(?:([pvace])(?!.*\1)){0,5}$)" // this regex took me AGES to craft!! ... simple as it looks :(
+#define VIEW_RANGE R"(^v-(?:([pvace])(?!.*\1)){0,5}:\d{1,18}-\d{1,18}$)"
+#define VIEW_ENTRY R"(^v-(?:([pvace])(?!.*\1)){0,5}:\d{1,18}$)"
 #define ANALYSIS R"(^a$)"
 #define ANALYSIS_RANGE R"(^a:\d{1,18}-\d{1,18}$)"
-#define MAX_SEP
-#define MAX_VEL
-#define MAX_FORCE
-#define MAX_ACC
-#define MIN_SEP
-#define MIN_VEL
-#define MEAN_SEP // with SD?
-// include COM calculations
-// SHOULD COMBINE LAST 7 ABOVE OPTIONS INTO ONE AS THEY INVOLVE SIMILAR CALCULATIONS (would be a waste to sep. them)
-// perhaps actually last 9, and can be a range as well (maybe call it "advanced analysis" or something)
 
 std::regex va_rgx{VIEW_ALL};
 std::regex vh_rgx{VIEW_HEADER};
@@ -170,7 +160,7 @@ std::ostream &operator<<(std::ostream &os, const vector<T> &vec) {
         std::cout << VLCOL "j " PMCOL "+ " BOLD NNCOL << vec.z;
     return os << VLCOL "k" RST;
 }
-
+/* NOTE: all the `+ 0` additions below are simply for visual clarity, as the reduction in performance is minimal. */
 template <typename T> requires (std::is_floating_point_v<T>)
 const vector<T> *calc_acc(const etype<T> &entry, bool ret_dist = false) {
     static vector<T> acc_vals[6];
@@ -180,9 +170,9 @@ const vector<T> *calc_acc(const etype<T> &entry, bool ret_dist = false) {
     T r12_magsq = r12*r12;
     T r13_magsq = r13*r13;
     T r23_magsq = r23*r23;
-    acc_vals[0] =  gtd::sys::G_SI*(r12*(*(((T*) masses) + 1)/(r12_magsq)) + r13*(*(((T*) masses) + 2)/(r13_magsq)));
-    acc_vals[1] = -gtd::sys::G_SI*(r12*(*(((T*) masses))/(r12_magsq)) - r23*(*(((T*) masses) + 2)/(r23_magsq)));
-    acc_vals[2] = -gtd::sys::G_SI*(r13*(*(((T*) masses))/(r13_magsq)) + r23*(*(((T*) masses) + 1)/(r23_magsq)));
+    acc_vals[0] =  gtd::sys::G_SI*(r12*(*(((T*) masses) + 1)/powl(r12_magsq, 1.5l)) + r13*(*(((T*) masses) + 2)/powl(r13_magsq, 1.5l)));
+    acc_vals[1] = -gtd::sys::G_SI*(r12*(*(((T*) masses) + 0)/powl(r12_magsq, 1.5l)) - r23*(*(((T*) masses) + 2)/powl(r23_magsq, 1.5l)));
+    acc_vals[2] = -gtd::sys::G_SI*(r13*(*(((T*) masses) + 0)/powl(r13_magsq, 1.5l)) + r23*(*(((T*) masses) + 1)/powl(r23_magsq, 1.5l)));
     if (ret_dist) {
         acc_vals[3] = r12;
         acc_vals[4] = r13;
@@ -201,9 +191,9 @@ std::pair<T*, vector<T>> calc_e(const etype<T> &entry) { // returns energies, CO
                   (gtd::sys::G_SI*(*(((T*) masses) + 1))*(*(((T*) masses) + 2)))/
                         mag(*(((vector<T>*) &entry) + 2) - *(((vector<T>*) &entry) + 1)));
     vector<T> com_vel = com(*(((vector<T>*) &entry) + 3), *(((vector<T>*) &entry) + 4), *(((vector<T>*) &entry) + 5));
-    e_vals[0] = 0.5l(*(((T*) masses) + 0)*(*(((vector<T>*) &entry) + 3) - com_vel) +
-                     *(((T*) masses) + 1)*(*(((vector<T>*) &entry) + 4) - com_vel) +
-                     *(((T*) masses) + 2)*(*(((vector<T>*) &entry) + 5) - com_vel));
+    e_vals[0] = 0.5l*(*(((T*) masses) + 0)*mag_sq(*(((vector<T>*) &entry) + 3) - com_vel) +
+                      *(((T*) masses) + 1)*mag_sq(*(((vector<T>*) &entry) + 4) - com_vel) +
+                      *(((T*) masses) + 2)*mag_sq(*(((vector<T>*) &entry) + 5) - com_vel));
     e_vals[2] = e_vals[0] + e_vals[1];
     return {e_vals, com_vel}; // have to calc. COM velocity, so might as well return it
 }
@@ -218,9 +208,9 @@ std::tuple<vector<T>*, T*, vector<T>> calc_acc_e(const etype<T> &entry) { // ret
     T r12_magsq = r12*r12;
     T r13_magsq = r13*r13;
     T r23_magsq = r23*r23;
-    acc_vals[0] =  gtd::sys::G_SI*(r12*(*(((T*) masses) + 1)/(r12_magsq)) + r13*(*(((T*) masses) + 2)/(r13_magsq)));
-    acc_vals[1] = -gtd::sys::G_SI*(r12*(*(((T*) masses) + 0)/(r12_magsq)) - r23*(*(((T*) masses) + 2)/(r23_magsq)));
-    acc_vals[2] = -gtd::sys::G_SI*(r13*(*(((T*) masses) + 0)/(r13_magsq)) + r23*(*(((T*) masses) + 1)/(r23_magsq)));
+    acc_vals[0] =  gtd::sys::G_SI*(r12*(*(((T*) masses) + 1)/powl(r12_magsq, 1.5l)) + r13*(*(((T*) masses) + 2)/powl(r13_magsq, 1.5l)));
+    acc_vals[1] = -gtd::sys::G_SI*(r12*(*(((T*) masses) + 0)/powl(r12_magsq, 1.5l)) - r23*(*(((T*) masses) + 2)/powl(r23_magsq, 1.5l)));
+    acc_vals[2] = -gtd::sys::G_SI*(r13*(*(((T*) masses) + 0)/powl(r13_magsq, 1.5l)) + r23*(*(((T*) masses) + 1)/powl(r23_magsq, 1.5l)));
     e_vals[1] = -((gtd::sys::G_SI*(*(((T*) masses) + 0))*(*(((T*) masses) + 1)))/sqrtl(r12_magsq) +
                   (gtd::sys::G_SI*(*(((T*) masses) + 0))*(*(((T*) masses) + 2)))/sqrtl(r13_magsq) +
                   (gtd::sys::G_SI*(*(((T*) masses) + 1))*(*(((T*) masses) + 2)))/sqrtl(r23_magsq));
@@ -261,18 +251,19 @@ void print_entry(const etype<T> &entry) {
                 print_pos(((vector<T>*) &entry) + idx);
             if constexpr (VEL)
                 print_vel(((vector<T>*) &entry) + 3 + idx);
-            print_acc(*acc++);
+            print_acc(acc++);
             ++idx;
         }
-        std::cout << HCOL << "----------\n" << ETCOL "KE: " ENCOL BOLD << *_e++ << RST UCOL " joules\n"
-                << ETCOL "PE: " ENCOL BOLD << *_e++ << RST UCOL " joules\n"
-                << ETCOL "E: " ENCOL BOLD << *_e << RST UCOL " joules\n" << RST;
         if constexpr (COM) {
             std::cout << COMPCOL "COM position: " BOLD NNCOL <<
                       com(*(((vector<T>*) &entry) + 0), *(((vector<T>*) &entry) + 1), *(((vector<T>*) &entry) + 2)) <<
-                      UCOL " m\n" RST;
-            std::cout << COMVCOL "COM velocity: " BOLD NNCOL << _com_vel << UCOL " m\n" RST;
+                      UCOL BOLD " m\n" RST;
+            std::cout << COMVCOL "COM velocity: " BOLD NNCOL << _com_vel << UCOL BOLD " m/s\n" RST;
         }
+        std::cout << HCOL << "----------\n" UDL CYAN_TXT_START "In COM frame:\n" UDLRST << ETCOL "\tKE: " ENCOL BOLD
+                  << *_e++ << UCOL " joules\n" RST
+                  << ETCOL "\tPE: " ENCOL BOLD << *_e++ << UCOL " joules\n" RST
+                  << ETCOL "\tE: " ENCOL BOLD << *_e << UCOL " joules\n" << RST;
         return;
     }
     if constexpr (ACC) {
@@ -283,16 +274,16 @@ void print_entry(const etype<T> &entry) {
                 print_pos(((vector<T>*) &entry) + idx);
             if constexpr (VEL)
                 print_vel(((vector<T>*) &entry) + 3 + idx);
-            print_acc(*acc++);
+            print_acc(acc++);
             ++idx;
         }
         if constexpr (COM) {
             std::cout << COMPCOL "COM position: " BOLD NNCOL <<
                       com(*(((vector<T>*) &entry) + 0), *(((vector<T>*) &entry) + 1), *(((vector<T>*) &entry) + 2)) <<
-                      UCOL " m\n" RST;
+                      UCOL BOLD " m\n" RST;
             std::cout << COMVCOL "COM velocity: " BOLD NNCOL <<
                       com(*(((vector<T>*) &entry) + 3), *(((vector<T>*) &entry) + 4), *(((vector<T>*) &entry) + 5)) <<
-                      UCOL " m\n" RST;
+                      UCOL BOLD " m/s\n" RST;
         }
         return;
     }
@@ -306,14 +297,15 @@ void print_entry(const etype<T> &entry) {
                 print_vel(((vector<T>*) &entry) + 3 + idx);
             ++idx;
         }
-        std::cout << HCOL << "----------\n" << ETCOL "KE: " ENCOL BOLD << *_e++ << RST UCOL " joules\n"
-                  << ETCOL "PE: " ENCOL BOLD << *_e++ << RST UCOL " joules\n"
-                  << ETCOL "E: " ENCOL BOLD << *_e << RST UCOL " joules\n" << RST;
+        std::cout << HCOL << "----------\n" UDL CYAN_TXT_START "In COM frame:\n" UDLRST << ETCOL "\tKE: " ENCOL BOLD
+                  << *_e++ << UCOL " joules\n" RST
+                  << ETCOL "\tPE: " ENCOL BOLD << *_e++ << UCOL " joules\n" RST
+                  << ETCOL "\tE: " ENCOL BOLD << *_e << UCOL " joules\n" << RST;
         if constexpr (COM) {
             std::cout << COMPCOL "COM position: " BOLD NNCOL <<
                       com(*(((vector<T>*) &entry) + 0), *(((vector<T>*) &entry) + 1), *(((vector<T>*) &entry) + 2)) <<
-                      UCOL " m\n" RST;
-            std::cout << COMVCOL "COM velocity: " BOLD NNCOL << _com_vel << UCOL " m\n" RST;
+                      UCOL BOLD " m\n" RST;
+            std::cout << COMVCOL "COM velocity: " BOLD NNCOL << _com_vel << UCOL BOLD " m/s\n" RST;
         }
         return;
     }
@@ -328,10 +320,10 @@ void print_entry(const etype<T> &entry) {
     if constexpr (COM) {
         std::cout << COMPCOL "COM position: " BOLD NNCOL <<
                   com(*(((vector<T>*) &entry) + 0), *(((vector<T>*) &entry) + 1), *(((vector<T>*) &entry) + 2)) <<
-                  UCOL " m\n" RST;
+                  UCOL BOLD " m\n" RST;
         std::cout << COMVCOL "COM velocity: " BOLD NNCOL <<
                   com(*(((vector<T>*) &entry) + 3), *(((vector<T>*) &entry) + 4), *(((vector<T>*) &entry) + 5)) <<
-                  UCOL " m\n" RST;
+                  UCOL BOLD " m/s\n" RST;
     }
 }
 
@@ -427,7 +419,8 @@ std::pair<uint64_t, uint64_t> get_indices(const char *str, const htype<T> &hdr) 
 
 template <typename T, bool POS, bool VEL, bool ACC, bool COM, bool ENERGY> requires (std::is_floating_point_v<T>)
 [[noreturn]] void view_range(const gtd::f3bodr<T> &reader, const char *action) { // over the CLOSED interval [lo,hi]
-    auto [idx1, idx2] = get_indices(action + 2, reader.header());//move past "r:" to point to first digit of start. idx
+    while (*action++ != ':');
+    auto [idx1, idx2] = get_indices<T>(action, reader.header());//move past ':' to point to first digit of start. index
     char *hyphens = get_hyphens(idx2);
     std::cout << "\033[38;5;6mRange: " BOLD "\033[38;5;7m[" LNCOL << idx1 << "\033[38;5;11m, " LNCOL
               << idx2 << "\033[38;5;7m]\n\n";
@@ -443,7 +436,8 @@ template <typename T, bool POS, bool VEL, bool ACC, bool COM, bool ENERGY> requi
 
 template <typename T, bool POS, bool VEL, bool ACC, bool COM, bool ENERGY> requires (std::is_floating_point_v<T>)
 [[noreturn]] void view_entry(const gtd::f3bodr<T> &reader, const char *action) {
-    uint64_t idx = to_uint64(action + 2);
+    while (*action++ != ':');
+    uint64_t idx = to_uint64(action);
     const htype<T> &hdr = reader.header();
     if (idx >= hdr.N) {
         std::cerr << BOLD UDL ERRCOL "Error:" UDLRST ERRTCOL " specified index is out-of-range for a .3bod file with "
@@ -460,25 +454,26 @@ template <typename T, bool POS, bool VEL, bool ACC, bool COM, bool ENERGY> requi
 
 template <typename T> requires (std::is_floating_point_v<T>)
 [[noreturn]] void perform_analysis(const gtd::f3bodr<T> &reader, uint64_t idx_lo, uint64_t idx_hi) {
+    T inf = std::numeric_limits<T>::infinity();
     std::cout << "\033[38;5;6mRange: " BOLD "\033[38;5;7m[" LNCOL << idx_lo << "\033[38;5;11m, " LNCOL
               << idx_hi << "\033[38;5;7m]\n\n";
     uint64_t _num = idx_hi - idx_lo + 1;
-    std::pair<std::pair<unsigned char, unsigned char>, T> max_sep;
-    T max_vels[3]{};
-    T max_acc[3]{}; // max_forces will follow from this
-    std::pair<std::pair<unsigned char, unsigned char>, T> min_sep = {{}, std::numeric_limits<T>::infinity()};
-    T min_vels[3] = {std::numeric_limits<T>::infinity()};
+    std::tuple<T, std::pair<unsigned char, unsigned char>, uint64_t> max_sep; // max. sep, body numbers, epoch number
+    std::pair<T, uint64_t> max_vels[3] = {{0, (uint64_t) -1}, {0, (uint64_t) -1}, {0, (uint64_t) -1}};
+    std::pair<T, uint64_t> max_acc[3] = {{0, (uint64_t) -1}, {0, (uint64_t) -1}, {0, (uint64_t) -1}}; // max. forces will follow from this
+    std::tuple<T, std::pair<unsigned char, unsigned char>, uint64_t> min_sep = {inf, {}, (uint64_t) -1};
+    std::pair<T, uint64_t> min_vels[3] = {{inf, (uint64_t) -1}, {inf, (uint64_t) -1}, {inf, (uint64_t) -1}};
     T mean_seps[3]{};
     T mean_sq_seps[3]{}; // mean of the squares of the separation - used for SD calculation
     // T sep_sd = 0;
     T distances[3]{};
     auto it = reader.begin() + idx_lo;
-    uint64_t counter = 0;
-    vector<T> *p1, *p2, *p3, *v1, *v2, *v3, pp1{*((vector<T>*) it.operator->() + 0)},
-               pp2{*((vector<T>*) it.operator->() + 3)}, pp3{*((vector<T>*) it.operator->() + 6)};
+    uint64_t counter = idx_lo;
+    vector<T> *p1, *p2, *p3, *v1, *v2, *v3, pp1{*(((vector<T>*) it->positions) + 0)},
+               pp2{*(((vector<T>*) it->positions) + 1)}, pp3{*(((vector<T>*) it->positions) + 2)};
     const vector<T> *acc_sep{};
     T val1, val2, val3;
-    while (counter++ < _num) { /*
+    while (counter <= idx_hi) { /*
         p1 = (vector<T>*) it->positions[0];
         p2 = (vector<T>*) it->positions[3];
         p3 = (vector<T>*) it->positions[6];
@@ -486,12 +481,18 @@ template <typename T> requires (std::is_floating_point_v<T>)
         v2 = (vector<T>*) it->velocities[3];
         v3 = (vector<T>*) it->velocities[6]; */
         acc_sep = calc_acc<T>(*it, true);
-        if ((val1 = mag(*acc_sep)) > max_acc[0])
-            max_acc[0] = val1;
-        if ((val2 = mag(*++acc_sep)) > max_acc[1])
-            max_acc[1] = val2;
-        if ((val3 = mag(*++acc_sep)) > max_acc[2])
-            max_acc[2] = val3;
+        if ((val1 = mag(*acc_sep)) > max_acc[0].first) {
+            max_acc[0].first = val1;
+            max_acc[0].second = counter;
+        }
+        if ((val2 = mag(*++acc_sep)) > max_acc[1].first) {
+            max_acc[1].first = val2;
+            max_acc[1].second = counter;
+        }
+        if ((val3 = mag(*++acc_sep)) > max_acc[2].first) {
+            max_acc[2].first = val3;
+            max_acc[2].second = counter;
+        }
         val1 = mag(*++acc_sep); // |r12|
         val2 = mag(*++acc_sep); // |r13|
         val3 = mag(*++acc_sep); // |r23|
@@ -503,88 +504,109 @@ template <typename T> requires (std::is_floating_point_v<T>)
         mean_sq_seps[0] += val1*val1;
         mean_sq_seps[1] += val2*val2;
         mean_sq_seps[2] += val3*val3;
-        distances[0] += mag(*((vector<T>*) (it.operator->() + 0)) - pp1); // add dist between currpos and prevpos to tot.
-        distances[1] += mag(*((vector<T>*) (it.operator->() + 3)) - pp2); // redundant zero-addition in first iteration
-        distances[2] += mag(*((vector<T>*) (it.operator->() + 6)) - pp3);
-        pp1 = *((vector<T>*) (it.operator->() + 0));
-        pp2 = *((vector<T>*) (it.operator->() + 3));
-        pp3 = *((vector<T>*) (it.operator->() + 6));
-        if (val1 > max_sep.second) {
-            if (val2 > max_sep.second)
+        distances[0] += mag(*(((vector<T>*) it->positions) + 0) - pp1); // add dist between currpos and prevpos to tot.
+        distances[1] += mag(*(((vector<T>*) it->positions) + 1) - pp2); // redundant zero-addition in first iteration
+        distances[2] += mag(*(((vector<T>*) it->positions) + 2) - pp3);
+        pp1 = *(((vector<T>*) it->positions) + 0);
+        pp2 = *(((vector<T>*) it->positions) + 1);
+        pp3 = *(((vector<T>*) it->positions) + 2);
+        if (val1 > std::get<0>(max_sep)) {
+            if (val2 > std::get<0>(max_sep))
                 goto max2;
-            if (val3 > max_sep.second)
+            if (val3 > std::get<0>(max_sep))
                 goto max3;
-            max_sep.first.first = 1;
-            max_sep.first.second = 2;
-            max_sep.second = val1;
+            std::get<1>(max_sep).first = 1;
+            std::get<1>(max_sep).second = 2;
+            std::get<0>(max_sep) = val1;
+            std::get<2>(max_sep) = counter;
         }
-        else if (val2 > max_sep.second) {
+        else if (val2 > std::get<0>(max_sep)) {
             max2:
-            if (val3 > max_sep.second)
+            if (val3 > std::get<0>(max_sep))
                 goto max3;
-            max_sep.first.first = 1;
-            max_sep.first.second = 3;
-            max_sep.second = val2;
+            std::get<1>(max_sep).first = 1;
+            std::get<1>(max_sep).second = 3;
+            std::get<0>(max_sep) = val2;
+            std::get<2>(max_sep) = counter;
         }
-        else if (val3 > max_sep.second) {
+        else if (val3 > std::get<0>(max_sep)) {
             max3:
-            max_sep.first.first = 2;
-            max_sep.first.second = 3;
-            max_sep.second = val3;
+            std::get<1>(max_sep).first = 2;
+            std::get<1>(max_sep).second = 3;
+            std::get<0>(max_sep) = val3;
+            std::get<2>(max_sep) = counter;
         }
-        if (val1 < min_sep.second) {
-            if (val2 < min_sep.second)
+        if (val1 < std::get<0>(min_sep)) {
+            if (val2 < std::get<0>(min_sep))
                 goto min2;
-            if (val3 < min_sep.second)
+            if (val3 < std::get<0>(min_sep))
                 goto min3;
-            min_sep.first.first = 1;
-            min_sep.first.second = 2;
-            min_sep.second = val1;
+            std::get<1>(min_sep).first = 1;
+            std::get<1>(min_sep).second = 2;
+            std::get<0>(min_sep) = val1;
+            std::get<2>(min_sep) = counter;
         }
-        else if (val2 < min_sep.second) {
+        else if (val2 < std::get<0>(min_sep)) {
             min2:
-            if (val3 < min_sep.second)
+            if (val3 < std::get<0>(min_sep))
                 goto min3;
-            min_sep.first.first = 1;
-            min_sep.first.second = 3;
-            min_sep.second = val2;
+            std::get<1>(min_sep).first = 1;
+            std::get<1>(min_sep).second = 3;
+            std::get<0>(min_sep) = val2;
+            std::get<2>(min_sep) = counter;
         }
-        else if (val3 < min_sep.second) {
+        else if (val3 < std::get<0>(min_sep)) {
             min3:
-            min_sep.first.first = 2;
-            min_sep.first.second = 3;
-            min_sep.second = val3;
+            std::get<1>(min_sep).first = 2;
+            std::get<1>(min_sep).second = 3;
+            std::get<0>(min_sep) = val3;
+            std::get<2>(min_sep) = counter;
         }
-        if ((val1 = mag(*((vector<T>*) (it.operator->() + 9)))) > max_vels[0])
-            max_vels[0] = val1;
-        if ((val2 = mag(*((vector<T>*) (it.operator->() + 12)))) > max_vels[1])
-            max_vels[1] = val2;
-        if ((val3 = mag(*((vector<T>*) (it.operator->() + 15)))) > max_vels[2])
-            max_vels[2] = val3;
-        if (val1 < min_vels[0])
-            min_vels[0] = val1;
-        if (val2 < min_vels[1])
-            min_vels[1] = val2;
-        if (val3 < min_vels[2])
-            min_vels[2] = val3;
+        // std::cout << "it: " << *(((vector<T>*) &(*it)) + 5) << std::endl;
+        if ((val1 = mag(*(((vector<T>*) it->velocities) + 0))) > max_vels[0].first) {
+            max_vels[0].first = val1;
+            max_vels[0].second = counter;
+        }
+        if ((val2 = mag(*(((vector<T>*) it->velocities) + 1))) > max_vels[1].first) {
+            max_vels[1].first = val2;
+            max_vels[1].second = counter;
+        }
+        if ((val3 = mag(*(((vector<T>*) it->velocities) + 2))) > max_vels[2].first) {
+            max_vels[2].first = val3;
+            max_vels[2].second = counter;
+        }
+        if (val1 < min_vels[0].first) {
+            min_vels[0].first = val1;
+            min_vels[0].second = counter;
+        }
+        if (val2 < min_vels[1].first) {
+            min_vels[1].first = val2;
+            min_vels[1].second = counter;
+        }
+        if (val3 < min_vels[2].first) {
+            min_vels[2].first = val3;
+            min_vels[2].second = counter;
+        }
+        // std::cout << "Epoch " << counter++ << ": " << val1 << ", " << val2 << ", " << val3 << std::endl;
         ++it;
-        std::cout << "\rProcessed epoch " << counter << '/' << _num;
+        std::cout << "\rProcessed epoch " << counter++ << '/' << idx_hi;
         std::cout.flush();
     }
-    std::cout << "\n----------\n----------\nMax. separation = " << max_sep.second << ", between bodies "
-              << +max_sep.first.first << " and " << +max_sep.first.second << "\n----------\n";
-    std::cout << "\n----------\nMin. separation = " << min_sep.second << ", between bodies "
-              << +min_sep.first.first << " and " << +min_sep.first.second << "\n----------\n";
+    std::cout << "\n----------\n----------\nMax. separation = " << std::get<0>(max_sep) << " m, between bodies "
+              << +std::get<1>(max_sep).first << " and " << +std::get<1>(max_sep).second << " at epoch " << std::get<2>(max_sep) << "\n----------\n";
+    std::cout << "\n----------\nMin. separation = " << std::get<0>(min_sep) << " m, between bodies "
+              << +std::get<1>(min_sep).first << " and " << +std::get<1>(min_sep).second << " at epoch " << std::get<2>(min_sep) << "\n----------";
     char c2;
     for (counter = 0, c2 = 1; counter < 3; ++counter, ++c2)
-        std::cout << "Max. velocity of Body " << +c2 << " = " << max_vels[counter] << '\n';
-    std::cout << "----------\n";
+        std::cout << "\nMax. velocity of Body " << +c2 << " = " << max_vels[counter].first << " m/s at epoch " << max_vels[counter].second;
+    std::cout << "\n----------\n";
     for (counter = 0, c2 = 1; counter < 3; ++counter, ++c2)
-        std::cout << "Min. velocity of Body " << +c2 << " = " << min_vels[counter] << '\n';
-    std::cout << "----------\n";
+        std::cout << "\nMin. velocity of Body " << +c2 << " = " << min_vels[counter].first << " m/s at epoch " << min_vels[counter].second;
+    std::cout << "\n----------\n";
     for (counter = 0, c2 = 1; counter < 3; ++counter, ++c2)
-        std::cout << "Max. acceleration of Body " << +c2 << " = " << max_acc[counter] <<
-        "\nMax. force on Body " << +c2 << " = " << max_acc[counter]*(*(((T*) masses) + counter)) << '\n';
+        std::cout << "Max. acceleration of Body " << +c2 << " = " << max_acc[counter].first <<
+        " m/s^2\nMax. force on Body " << +c2 << " = " << max_acc[counter].first*(*(((T*) masses) + counter))
+        << " N at epoch " << max_acc[counter].second << "\n----\n";
     mean_seps[0] /= _num;
     mean_seps[1] /= _num;
     mean_seps[2] /= _num;
@@ -610,7 +632,7 @@ template <typename T> requires (std::is_floating_point_v<T>)
 template <typename T> requires (std::is_floating_point_v<T>)
 [[noreturn]] void analysis_range(const gtd::f3bodr<T> &reader, const char *action) {
     while (*action++ != ':');
-    auto [idx1, idx2] = get_indices(action, reader.header());
+    auto [idx1, idx2] = get_indices<T>(action, reader.header());
     perform_analysis<T>(reader, idx1, idx2);
 }
 
@@ -724,6 +746,8 @@ template <typename T> requires (std::is_floating_point_v<T>)
     if (!_p && !_v && !_a && !_c && !_e) { \
         func<T, false, false, false, false, false>(__VA_ARGS__); \
     }
+    if (parser.empty())
+        view_all<T, true, true, false, false, false>(reader);
     bool _p, _v, _a, _c, _e;
     const char *action = nullptr;
     if ((action = parser.get_arg(vh_rgx)))
@@ -758,12 +782,16 @@ template <typename T> requires (std::is_floating_point_v<T>)
     if ((action = parser.get_arg(an_rgx))) {
         // WITH_ACTION
         // FUNC_SELECT(analysis, reader)
+        masses = new T[3]{};
+        gtd::copy(masses, reader.header().masses, 3*sizeof(T));
         analysis<T>(reader);
     }
     if ((action = parser.get_arg(anr_rgx))) {
         // WITH_ACTION
         // FUNC_SELECT(analysis_range, reader, action)
-        analysis<T>(reader, action);
+        masses = new T[3]{};
+        gtd::copy(masses, reader.header().masses, 3*sizeof(T));
+        analysis_range<T>(reader, action);
     }
     std::cerr << BOLD UDL ERRCOL "Error:" UDLRST ERRTCOL " invalid action specified.\n";
     exit(1);

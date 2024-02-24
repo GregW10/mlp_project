@@ -20,13 +20,11 @@ int main(int argc, char **argv) {
     std::cout << "Sum: " << var(7, 6, 5, 4, 3, 2, 1) << std::endl;
     std::cout << std::boolalpha << gtd::is_integral(argc > 1 ? *(argv + 1) : "2382929") << std::endl;
     std::cout << std::boolalpha << gtd::contains(argc > 1 ? *(argv + 1) : "2382929", '1') << std::endl;
-    long double *p1, *p2;
-    long double shit = 23;
-    p1 = &shit;
-    p2 = &shit;
-    std::cout << *p1 << ", " << *p2 << std::endl;
     vec<long double> v;
     std::cout << "x: " << v.x << ", y: " << v.y << ", z: " << v.z << std::endl;
     std::cout << sizeof(vec<char>) << std::endl;
+    if (setenv("TERM", "dumb", 1) == -1) // doesn't work :( or rather setting TERM to "dumb" doesn't stop coloured outp.
+        std::cerr << "setenv error\n";
+    std::cout << "\033[1m\033[32mTesting...\n";
     return 0;
 }
