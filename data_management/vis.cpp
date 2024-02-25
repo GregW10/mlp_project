@@ -40,8 +40,8 @@ using htype = typename gtd::f3bodr<T>::hdr_t;
 #define RST "\033[0m" // reset text flags
 #define ERRCOL "\033[38;5;214m" // "Error: " colour
 #define ERRTCOL "\033[38;5;226m" // colour of text coming after "Error: "
-#define ENTRYTCOL "\033[38;5;174m" // entry text colour
-#define ENTRYNCOL "\033[38;5;199m" // entry number colour
+#define ENTRYTCOL "\033[38;5;10m" // entry text colour
+#define ENTRYNCOL "\033[38;5;226m" // entry number colour
 #define BTCOL "\033[96m" // body text colour
 #define BNCOL "\033[95m" // body number colour
 #define COMPCOL "\033[38;5;134m" // COM pos. desc. colour
@@ -57,6 +57,7 @@ using htype = typename gtd::f3bodr<T>::hdr_t;
 #define HCOL "\033[38;5;123m" // hyphen colour
 #define SHCOL "\033[38;5;145m" // sub-hyphen colour
 #define HDFCOL "\033[38;5;21m" // header field colour
+#define ANFCOL "\033[38;5;27m" // analysis field colour
 #define ICHCOL "\033[38;5;123m" // info char colour
 
 void *masses{}; // pointer to masses (only used for acc/e/com calculations)
@@ -456,30 +457,23 @@ template <typename T> requires (std::is_floating_point_v<T>)
 [[noreturn]] void perform_analysis(const gtd::f3bodr<T> &reader, uint64_t idx_lo, uint64_t idx_hi) {
     T inf = std::numeric_limits<T>::infinity();
     std::cout << "\033[38;5;6mRange: " BOLD "\033[38;5;7m[" LNCOL << idx_lo << "\033[38;5;11m, " LNCOL
-              << idx_hi << "\033[38;5;7m]\n\n";
+              << idx_hi << "\033[38;5;7m]\n\n" RST;
     uint64_t _num = idx_hi - idx_lo + 1;
     std::tuple<T, std::pair<unsigned char, unsigned char>, uint64_t> max_sep; // max. sep, body numbers, epoch number
     std::pair<T, uint64_t> max_vels[3] = {{0, (uint64_t) -1}, {0, (uint64_t) -1}, {0, (uint64_t) -1}};
-    std::pair<T, uint64_t> max_acc[3] = {{0, (uint64_t) -1}, {0, (uint64_t) -1}, {0, (uint64_t) -1}}; // max. forces will follow from this
+    std::pair<T, uint64_t> max_acc[3] = {{0, (uint64_t) -1}, {0, (uint64_t) -1}, {0, (uint64_t) -1}};//max. forces after
     std::tuple<T, std::pair<unsigned char, unsigned char>, uint64_t> min_sep = {inf, {}, (uint64_t) -1};
     std::pair<T, uint64_t> min_vels[3] = {{inf, (uint64_t) -1}, {inf, (uint64_t) -1}, {inf, (uint64_t) -1}};
     T mean_seps[3]{};
     T mean_sq_seps[3]{}; // mean of the squares of the separation - used for SD calculation
-    // T sep_sd = 0;
     T distances[3]{};
     auto it = reader.begin() + idx_lo;
     uint64_t counter = idx_lo;
-    vector<T> *p1, *p2, *p3, *v1, *v2, *v3, pp1{*(((vector<T>*) it->positions) + 0)},
-               pp2{*(((vector<T>*) it->positions) + 1)}, pp3{*(((vector<T>*) it->positions) + 2)};
+    vector<T> pp1{*(((vector<T>*) it->positions) + 0)}, pp2{*(((vector<T>*) it->positions) + 1)},
+              pp3{*(((vector<T>*) it->positions) + 2)};
     const vector<T> *acc_sep{};
     T val1, val2, val3;
-    while (counter <= idx_hi) { /*
-        p1 = (vector<T>*) it->positions[0];
-        p2 = (vector<T>*) it->positions[3];
-        p3 = (vector<T>*) it->positions[6];
-        v1 = (vector<T>*) it->velocities[0];
-        v2 = (vector<T>*) it->velocities[3];
-        v3 = (vector<T>*) it->velocities[6]; */
+    while (counter <= idx_hi) {
         acc_sep = calc_acc<T>(*it, true);
         if ((val1 = mag(*acc_sep)) > max_acc[0].first) {
             max_acc[0].first = val1;
@@ -496,8 +490,6 @@ template <typename T> requires (std::is_floating_point_v<T>)
         val1 = mag(*++acc_sep); // |r12|
         val2 = mag(*++acc_sep); // |r13|
         val3 = mag(*++acc_sep); // |r23|
-        // mean_sep += val1 + val2 + val3;
-        // mean_sq_sep += val1*val1 + val2*val2 + val3*val3;
         mean_seps[0] += val1;
         mean_seps[1] += val2;
         mean_seps[2] += val3;
@@ -562,7 +554,6 @@ template <typename T> requires (std::is_floating_point_v<T>)
             std::get<0>(min_sep) = val3;
             std::get<2>(min_sep) = counter;
         }
-        // std::cout << "it: " << *(((vector<T>*) &(*it)) + 5) << std::endl;
         if ((val1 = mag(*(((vector<T>*) it->velocities) + 0))) > max_vels[0].first) {
             max_vels[0].first = val1;
             max_vels[0].second = counter;
@@ -587,26 +578,33 @@ template <typename T> requires (std::is_floating_point_v<T>)
             min_vels[2].first = val3;
             min_vels[2].second = counter;
         }
-        // std::cout << "Epoch " << counter++ << ": " << val1 << ", " << val2 << ", " << val3 << std::endl;
         ++it;
-        std::cout << "\rProcessed epoch " << counter++ << '/' << idx_hi;
+        std::cout << RST ICHCOL "\rProcessed epoch \033[38;5;214m" BOLD << counter++ << "\033[38;5;226m/\033[38;5;10m" << idx_hi;
         std::cout.flush();
     }
-    std::cout << "\n----------\n----------\nMax. separation = " << std::get<0>(max_sep) << " m, between bodies "
-              << +std::get<1>(max_sep).first << " and " << +std::get<1>(max_sep).second << " at epoch " << std::get<2>(max_sep) << "\n----------\n";
-    std::cout << "\n----------\nMin. separation = " << std::get<0>(min_sep) << " m, between bodies "
-              << +std::get<1>(min_sep).first << " and " << +std::get<1>(min_sep).second << " at epoch " << std::get<2>(min_sep) << "\n----------";
+#define EQUALS "\033[38;5;51m = " NNCOL
+    std::cout << HCOL "\n----------\n" ANFCOL "Max. separation" EQUALS << std::get<0>(max_sep)
+              << UCOL " m" ANFCOL ", between bodies " BNCOL
+              << +std::get<1>(max_sep).first << ANFCOL " and " BNCOL
+              << +std::get<1>(max_sep).second << ANFCOL " at " ENTRYTCOL "epoch " ENTRYNCOL << std::get<2>(max_sep)
+              << HCOL "\n----------\n" ANFCOL "Min. separation" EQUALS
+              << std::get<0>(min_sep) << UCOL " m" ANFCOL ", between bodies " BNCOL
+              << +std::get<1>(min_sep).first << ANFCOL " and " BNCOL << +std::get<1>(min_sep).second
+              << ANFCOL " at " ENTRYTCOL "epoch " ENTRYNCOL << std::get<2>(min_sep) << HCOL "\n----------";
     char c2;
     for (counter = 0, c2 = 1; counter < 3; ++counter, ++c2)
-        std::cout << "\nMax. velocity of Body " << +c2 << " = " << max_vels[counter].first << " m/s at epoch " << max_vels[counter].second;
-    std::cout << "\n----------\n";
+        std::cout << ANFCOL "\nMax. velocity of Body " BNCOL << +c2 << EQUALS << max_vels[counter].first
+                  << UCOL " m/s " ANFCOL "at " ENTRYTCOL "epoch " ENTRYNCOL << max_vels[counter].second;
+    std::cout << HCOL "\n----------";
     for (counter = 0, c2 = 1; counter < 3; ++counter, ++c2)
-        std::cout << "\nMin. velocity of Body " << +c2 << " = " << min_vels[counter].first << " m/s at epoch " << min_vels[counter].second;
-    std::cout << "\n----------\n";
+        std::cout << ANFCOL "\nMin. velocity of Body " BNCOL << +c2 << EQUALS << min_vels[counter].first
+                  << UCOL " m/s " ANFCOL "at" ENTRYTCOL " epoch " ENTRYNCOL << min_vels[counter].second;
+    std::cout << HCOL "\n----------";
     for (counter = 0, c2 = 1; counter < 3; ++counter, ++c2)
-        std::cout << "Max. acceleration of Body " << +c2 << " = " << max_acc[counter].first <<
-        " m/s^2\nMax. force on Body " << +c2 << " = " << max_acc[counter].first*(*(((T*) masses) + counter))
-        << " N at epoch " << max_acc[counter].second << "\n----\n";
+        std::cout << ANFCOL "\nMax. acceleration of Body " BNCOL << +c2 << EQUALS << max_acc[counter].first
+                  << UCOL " m/s^2" ANFCOL "\nMax. force on Body " BNCOL << +c2 << EQUALS
+                  << max_acc[counter].first*(*(((T*) masses) + counter))
+                  << UCOL " N " ANFCOL "at" ENTRYTCOL " epoch " ENTRYNCOL << max_acc[counter].second << HCOL "\n----";
     mean_seps[0] /= _num;
     mean_seps[1] /= _num;
     mean_seps[2] /= _num;
@@ -617,15 +615,19 @@ template <typename T> requires (std::is_floating_point_v<T>)
     vars[0] = mean_sq_seps[0] - mean_seps[0]*mean_seps[0];
     vars[1] = mean_sq_seps[1] - mean_seps[1]*mean_seps[1];
     vars[2] = mean_sq_seps[2] - mean_seps[2]*mean_seps[2];
-    std::cout << "----------\nMean sep. between bodies 1 and 2 = " << mean_seps[0] << " m +/- " << sqrtl(vars[0]);
-    std::cout << " m\nMean sep. between bodies 1 and 3 = " << mean_seps[1] << " m +/- " << sqrtl(vars[1]);
-    std::cout << " m\nMean sep. between bodies 2 and 3 = " << mean_seps[2] << " m +/- " << sqrtl(vars[2]);
-    std::cout << " m\nMean sep. = " << (mean_seps[0] + mean_seps[1] + mean_seps[2])/3 << " m +/- "
-              << sqrtl(vars[0] + vars[1] + vars[2])/3
-              << "\n----------\n";
+    std::cout << "------\n" ANFCOL "Mean sep. between bodies " BNCOL "1" ANFCOL " and " BNCOL "2" EQUALS << mean_seps[0]
+              << UCOL " m " PMCOL "+/- " NNCOL << sqrtl(vars[0])
+              << UCOL " m" ANFCOL "\nMean sep. between bodies " BNCOL "1" ANFCOL " and " BNCOL "3" EQUALS
+              << mean_seps[1] << UCOL " m " PMCOL "+/- " NNCOL << sqrtl(vars[1])
+              << UCOL " m" ANFCOL "\nMean sep. between bodies " BNCOL "2" ANFCOL " and " BNCOL "3" EQUALS
+              << mean_seps[2] << UCOL " m " PMCOL "+/- " NNCOL << sqrtl(vars[2])
+              << UCOL " m" HCOL "\n----\n" ANFCOL "Mean sep." EQUALS << (mean_seps[0] + mean_seps[1] + mean_seps[2])/3
+              << UCOL " m " PMCOL "+/- " NNCOL << sqrtl(vars[0] + vars[1] + vars[2])/3 << HCOL "\n----------\n";
     for (counter = 0, c2 = 1; counter < 3; ++counter, ++c2)
-        std::cout << "Total distance covered by Body " << +c2 << " = " << distances[counter] << '\n';
-    std::cout << "Total distance covered by all 3 bodies = " << distances[0] + distances[1] + distances[2] << std::endl;
+        std::cout << ANFCOL "Total distance covered by Body " BNCOL << +c2 << EQUALS << distances[counter]
+                  << UCOL " m\n";
+    std::cout << HCOL "----\n" ANFCOL "Total distance covered by all 3 bodies" EQUALS
+              << distances[0] + distances[1] + distances[2] << UCOL " m" HCOL "\n----------" << std::endl;
     exit(0);
 }
 
