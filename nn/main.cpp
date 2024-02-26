@@ -4,6 +4,14 @@
 
 #define NUMBER 262144
 
+struct vecc {
+    long double x, y, z;
+    unsigned long long s;
+    char c;
+    char a;
+    short b[3];
+};
+
 int main(int argc, char **argv) {
     gml::matrix<long double> mat{{1, 2, 3}, {4, 5, 6}, {7, 8, 9}};
     std::cout << "mat.tsr bytes written: " << mat.to_tsr("mat.tsr") << std::endl;
@@ -53,20 +61,21 @@ int main(int argc, char **argv) {
             *p2++ = r(i, j);
         }
     }
-    std::cout << r << std::endl;
-    r.to_tsr("big.tsr");
-    r.to_mtsr("big.mtsr");
     std::chrono::time_point<std::chrono::system_clock> end2 = std::chrono::system_clock::now();
     std::chrono::nanoseconds duration1 = std::chrono::duration_cast<std::chrono::nanoseconds>(end1 - start1);
     std::chrono::nanoseconds duration2 = std::chrono::duration_cast<std::chrono::nanoseconds>(end2 - start2);
     std::cout << "Duration of .at(): " << duration1.count() << std::endl;
     std::cout << "Duration of .operator(): " << duration2.count() << std::endl;
+    r.to_tsr("big.tsr");
+    r.to_mtsr("big.mtsr");
     delete [] org1;
     delete [] org2;
-    gml::matrix<long double> bigfromt{"big.tsr"};
-    std::cout << "Bigfromt:\n" << bigfromt << std::endl;
-    gml::matrix<long double> bigfromm{"big.mtsr"};
-    std::cout << "Bigfromm:\n" << bigfromm << std::endl;
-    std::cout << std::boolalpha << (r == bigfromt && r == bigfromm && bigfromt == bigfromm) << std::endl;
+    gml::matrix<long double> good{"big.tsr"};
+    gml::matrix<long double> bad{"big.mtsr"};
+    std::cout << std::boolalpha << (r == good && r == bad && good == bad) << std::endl;
+    std::cout << "Long double: " << typeid(long double).name() << std::endl;
+    std::cout << "Common between d and ld: " << typeid(std::common_type<double, long double>::type).name() << std::endl;
+    std::cout << "Double: " << typeid(double).name() << std::endl;
+    std::cout << "Common between d and f: " << typeid(std::common_type<double, float>::type).name() << std::endl;
     return 0;
 }

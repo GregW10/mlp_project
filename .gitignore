@@ -9,6 +9,9 @@ experiment*/
 *.bmp
 *.3bod
 *.pdf
+*.tsr
+*.mtsr
+*.vtsr
 shit*
 
 CMakeLists.txt
