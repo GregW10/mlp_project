@@ -13,6 +13,7 @@ experiment*/
 *.mtsr
 *.vtsr
 shit*
+test.*
 
 CMakeLists.txt
 notes.txt

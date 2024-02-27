@@ -1,4 +1,4 @@
-#include "../glib/ml/gregmtx.hpp"
+#include "../glib/ml/gregvct.hpp"
 #include <random>
 #include <chrono>
 
@@ -33,5 +33,11 @@ int main() {
     m1.to_mtsr("m1.mtsr");
     m2.to_mtsr("m2.mtsr");
     m3.to_mtsr("m3.mtsr");
+    gml::matrix<long double> test;
+    std::cout << test << std::endl;
+    std::cout << test.shape() << std::endl;
+    std::cout << test.shape().volume() << std::endl;
+    gml::matrix<long double> t2{3, 6};
+    std::cout << t2 << std::endl;
     return 0;
 }
