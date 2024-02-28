@@ -23,8 +23,17 @@ int main(int argc, char **argv) {
     vec<long double> v;
     std::cout << "x: " << v.x << ", y: " << v.y << ", z: " << v.z << std::endl;
     std::cout << sizeof(vec<char>) << std::endl;
-    if (setenv("TERM", "dumb", 1) == -1) // doesn't work :( or rather setting TERM to "dumb" doesn't stop coloured outp.
-        std::cerr << "setenv error\n";
-    std::cout << "\033[1m\033[32mTesting...\n";
+    // if (setenv("TERM", "dumb", 1) == -1) // doesn't work :( or rather setting TERM to "dumb" doesn't stop coloured outp.
+    //     std::cerr << "setenv error\n";
+    // std::cout << "\033[1m\033[32mTesting...\n";
+    pid_t pid = fork();
+    if (pid == 0) {
+        // execlp("sleep", "sleep", "30", (char *) nullptr);
+        const char *const args[] = {"sleep", "30", nullptr};
+        execvp("sleep", const_cast<char *const *>(args));
+    }
+    std::cout << "Waiting for child process with PID " << pid << std::endl;
+    wait(nullptr);
+    std::cout << "Child process exited." << std::endl;
     return 0;
 }
