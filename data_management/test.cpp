@@ -10,6 +10,30 @@ struct vec {
 };
 #pragma pack(pop)
 
+class A {
+    int x{}, y{}, z{};
+public:
+    A() = default;
+    A(int _x, int _y, int _z) : x{_x}, y{_y}, z{_z} {}
+    virtual A &negate() {
+        x = -x;
+        y = -y;
+        z = -z;
+        return *this;
+    }
+};
+
+template <bool b>
+class B : public A {
+public:
+    using A::A;
+    A &negate() override {
+        A &ref = *this;
+        B<!b> &rb = dynamic_cast<B<!b>&>(ref);
+        return rb;
+    }
+};
+
 int main(int argc, char **argv) {
     gtd::parser parser{argc, argv};
     const char *arg = parser.get_arg(std::regex{R"(^r-p?v?a?c?e?$)"});
@@ -26,14 +50,7 @@ int main(int argc, char **argv) {
     // if (setenv("TERM", "dumb", 1) == -1) // doesn't work :( or rather setting TERM to "dumb" doesn't stop coloured outp.
     //     std::cerr << "setenv error\n";
     // std::cout << "\033[1m\033[32mTesting...\n";
-    pid_t pid = fork();
-    if (pid == 0) {
-        // execlp("sleep", "sleep", "30", (char *) nullptr);
-        const char *const args[] = {"sleep", "30", nullptr};
-        execvp("sleep", const_cast<char *const *>(args));
-    }
-    std::cout << "Waiting for child process with PID " << pid << std::endl;
-    wait(nullptr);
-    std::cout << "Child process exited." << std::endl;
+    B<true> b{3, 2, 1};
+    b.negate();
     return 0;
 }
