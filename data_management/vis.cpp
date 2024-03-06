@@ -622,7 +622,8 @@ template <typename T> requires (std::is_floating_point_v<T>)
               << UCOL " m" ANFCOL "\nMean sep. between bodies " BNCOL "2" ANFCOL " and " BNCOL "3" EQUALS
               << mean_seps[2] << UCOL " m " PMCOL "+/- " NNCOL << sqrtl(vars[2])
               << UCOL " m" HCOL "\n----\n" ANFCOL "Mean sep." EQUALS << (mean_seps[0] + mean_seps[1] + mean_seps[2])/3
-              << UCOL " m " PMCOL "+/- " NNCOL << sqrtl(vars[0] + vars[1] + vars[2])/3 << HCOL "\n----------\n";
+              << UCOL " m " PMCOL "+/- " NNCOL << sqrtl(vars[0] + vars[1] + vars[2])/3
+              << UCOL " m" HCOL "\n----------\n";
     for (counter = 0, c2 = 1; counter < 3; ++counter, ++c2)
         std::cout << ANFCOL "Total distance covered by Body " BNCOL << +c2 << EQUALS << distances[counter]
                   << UCOL " m\n";

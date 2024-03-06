@@ -381,8 +381,8 @@ int main(int argc, char **argv) {
     if (dts <= 0)
         log_error("time-step scaling must be positive", tty);
     const long double vel_scale = parser.get_arg("--velocity_scaling", 0.5l); // scaling factor for velocities
-    if (vel_scale <= 0 || vel_scale > 1)
-        log_error("the velocity scaling factor must be within the interval (0,1].", tty);
+    if (vel_scale < 0 || vel_scale > 1)
+        log_error("the velocity scaling factor must be within the interval [0,1].", tty);
     const long double box_x = parser.get_arg("--box_width", 2.0l); // length of bounding box along x
     if (box_x <= 0)
         log_error("box width must be positive.", tty);
