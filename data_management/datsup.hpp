@@ -497,6 +497,20 @@ namespace gtd {
             template <isNumWrapper U, bool, bool>
             requires (std::is_floating_point_v<U> && sizeof(U) <= 255 && sizeof(long double) < 127)
             friend class f3bodr;
+            template <typename U> requires (std::is_floating_point_v<U>)
+            friend class normaliser;
+            template <typename U> requires (std::is_floating_point_v<U>)
+            friend class mass_normaliser;
+            template <typename U> requires (std::is_floating_point_v<U>)
+            friend class log_mass_normaliser;
+            template <typename U> requires (std::is_floating_point_v<U>)
+            friend class time_normaliser;
+            template <typename U> requires (std::is_floating_point_v<U>)
+            friend class pos_normaliser;
+            template <typename U> requires (std::is_floating_point_v<U>)
+            friend class vel_normaliser;
+            template <typename U> requires (std::is_floating_point_v<U>)
+            friend class log_vel_normaliser;
         };
         template <bool _chk>
         class entry_it<false, _chk> {
@@ -774,15 +788,15 @@ namespace gtd {
         explicit f3bodr(const char *path) {
             struct stat buff{};
             if (stat(path, &buff) == -1)
-                throw std::invalid_argument{"Error: .3bod file provided does not exist.\n"};
+                throw std::invalid_argument{"Error: .3bod/.3bodpp file provided does not exist.\n"};
             if (!S_ISREG(buff.st_mode))
-                throw std::invalid_argument{"Error: .3bod file provided is not a regular file.\n"};
+                throw std::invalid_argument{"Error: .3bod/.3bodpp file provided is not a regular file.\n"};
             if (buff.st_size < sizeof(hdr_t))
-                throw invalid_3bod_format{"Error: .3bod format invalid (at least for current type 'T'.\n"};
+                throw invalid_3bod_format{"Error: .3bod/.3bodpp format invalid (at least for current type 'T'.\n"};
             std::ifstream in{path, std::ios_base::in | std::ios_base::binary};
             in.read((char *) &hdr, sizeof(hdr_t));
-            if (hdr.hd[0] != '3' || hdr.hd[1] != 'B')
-                throw invalid_3bod_format{"Error: invalid .3bod header.\n"};
+            if (hdr.hd[0] != '3' || (hdr.hd[1] != 'B' && hdr.hd[1] != 'P'))
+                throw invalid_3bod_format{"Error: invalid .3bod/.3bodpp header.\n"};
             if (hdr.flt_size != sizeof(T))
                 throw invalid_3bod_T_size{"Error: reported size of f.p. data type does not match \"sizeof(T)\".\n"};
             if ((hdr.lds_coll >> 1) != sizeof(long double))
@@ -818,6 +832,20 @@ namespace gtd {
         void close() {
             this->_it.stop();
         }
+        template <typename U> requires (std::is_floating_point_v<U>)
+        friend class normaliser;
+        template <typename U> requires (std::is_floating_point_v<U>)
+        friend class mass_normaliser;
+        template <typename U> requires (std::is_floating_point_v<U>)
+        friend class log_mass_normaliser;
+        template <typename U> requires (std::is_floating_point_v<U>)
+        friend class time_normaliser;
+        template <typename U> requires (std::is_floating_point_v<U>)
+        friend class pos_normaliser;
+        template <typename U> requires (std::is_floating_point_v<U>)
+        friend class vel_normaliser;
+        template <typename U> requires (std::is_floating_point_v<U>)
+        friend class log_vel_normaliser;
     };
     // Here I define a trivial class used to compare two `std::thread` objects, such that `std::thread` objects can be
     // added to an `std::set`, where the `Compare` type is set to `thread_comparator`:
@@ -835,5 +863,4 @@ namespace gtd {
         }
     };
 }
-
 #endif
