@@ -11,22 +11,128 @@
     exit(1);
 }
 
-template <typename T> requires (std::is_floating_point_v<T>)
-std::pair<void (*)(T&), void (*)(T&)> afunc_selector(const char *arg) {
-    /* Function to select appropriate activation function and its derivative from command-line argument `arg`. */
-    if (!arg)
-        throw std::invalid_argument{"Error: activation function description cannot be nullptr.\n"};
-    if (gtd::str_eq(arg, "sigmoid"))
-        return {gml::activations::sigmoid<T>, gml::activations::sigmoid_d<T>};
-    if (gtd::str_eq(arg, "softsign"))
-        return {gml::activations::softsign<T>, gml::activations::softsign_d<T>};
-    std::cerr << "Error: invalid activation function \"" << arg << "\" passed.\n";
-    exit(1);
-}
-
 template <typename dtype, typename wtype> requires (std::is_floating_point_v<dtype> && std::is_floating_point_v<wtype>)
 void run_sim() {
     /* Runs the entire simulation. `dtype` is the data type of the data and `wtype` is the type to use in the NN. */
+}
+
+template <typename T> requires (std::is_floating_point_v<T>)
+gtd::normaliser<T> *get_normaliser(const char *norm_arg) {
+    // logic...
+    if (!norm_arg)
+        return nullptr;
+    norm_arg += 7;
+    if (!*norm_arg)
+        return nullptr;
+    bool _m = false;
+    bool _l = false;
+    bool _t = false;
+    bool _p = false;
+    bool _v = false;
+    do {
+        if (*norm_arg == 'm')
+            _m = true;
+        if (*norm_arg == 'l')
+            _l = true;
+        if (*norm_arg == 't')
+            _t = true;
+        if (*norm_arg == 'p')
+            _p = true;
+        if (*norm_arg == 'v')
+            _v = true;
+    } while (*++norm_arg);
+    if (_m) {
+        if (_t) {
+            if (_p) {
+                if (_v)
+                    return new gtd::gen_normaliser<T, gtd::mass_normaliser<T>, gtd::time_normaliser<T>, gtd::pos_normaliser<T>, gtd::vel_normaliser<T>>{};
+                else
+                    return new gtd::gen_normaliser<T, gtd::mass_normaliser<T>, gtd::time_normaliser<T>, gtd::pos_normaliser<T>>{};
+            }
+            else {
+                if (_v)
+                    return new gtd::gen_normaliser<T, gtd::mass_normaliser<T>, gtd::time_normaliser<T>, gtd::vel_normaliser<T>>{};
+                else
+                    return new gtd::gen_normaliser<T, gtd::mass_normaliser<T>, gtd::time_normaliser<T>>{};
+            }
+        }
+        else {
+            if (_p) {
+                if (_v)
+                    return new gtd::gen_normaliser<T, gtd::mass_normaliser<T>, gtd::pos_normaliser<T>, gtd::vel_normaliser<T>>{};
+                else
+                    return new gtd::gen_normaliser<T, gtd::mass_normaliser<T>, gtd::pos_normaliser<T>>{};
+            }
+            else {
+                if (_v)
+                    return new gtd::gen_normaliser<T, gtd::mass_normaliser<T>, gtd::vel_normaliser<T>>{};
+                else
+                    return new gtd::gen_normaliser<T, gtd::mass_normaliser<T>>{};
+            }
+        }
+    } else {
+        if (_l) { // `_m` and `_l` are mutually exclusive (this was already checked by the regex)
+            if (_t) {
+                if (_p) {
+                    if (_v)
+                        return new gtd::gen_normaliser<T, gtd::log_mass_normaliser<T>, gtd::time_normaliser<T>, gtd::pos_normaliser<T>, gtd::vel_normaliser<T>>{};
+                    else
+                        return new gtd::gen_normaliser<T, gtd::log_mass_normaliser<T>, gtd::time_normaliser<T>, gtd::pos_normaliser<T>>{};
+                }
+                else {
+                    if (_v)
+                        return new gtd::gen_normaliser<T, gtd::log_mass_normaliser<T>, gtd::time_normaliser<T>, gtd::vel_normaliser<T>>{};
+                    else
+                        return new gtd::gen_normaliser<T, gtd::log_mass_normaliser<T>, gtd::time_normaliser<T>>{};
+                }
+            }
+            else {
+                if (_p) {
+                    if (_v)
+                        return new gtd::gen_normaliser<T, gtd::log_mass_normaliser<T>, gtd::pos_normaliser<T>, gtd::vel_normaliser<T>>{};
+                    else
+                        return new gtd::gen_normaliser<T, gtd::log_mass_normaliser<T>, gtd::pos_normaliser<T>>{};
+                }
+                else {
+                    if (_v)
+                        return new gtd::gen_normaliser<T, gtd::log_mass_normaliser<T>, gtd::vel_normaliser<T>>{};
+                    else
+                        return new gtd::gen_normaliser<T, gtd::log_mass_normaliser<T>>{};
+                }
+            }
+        }
+        else {
+            if (_t) {
+                if (_p) {
+                    if (_v)
+                        return new gtd::gen_normaliser<T, gtd::time_normaliser<T>, gtd::pos_normaliser<T>, gtd::vel_normaliser<T>>{};
+                    else
+                        return new gtd::gen_normaliser<T, gtd::time_normaliser<T>, gtd::pos_normaliser<T>>{};
+                }
+                else {
+                    if (_v)
+                        return new gtd::gen_normaliser<T, gtd::time_normaliser<T>, gtd::vel_normaliser<T>>{};
+                    else
+                        return new gtd::gen_normaliser<T, gtd::time_normaliser<T>>{};
+                }
+            }
+            else {
+                if (_p) {
+                    if (_v)
+                        return new gtd::gen_normaliser<T, gtd::pos_normaliser<T>, gtd::vel_normaliser<T>>{};
+                    else
+                        return new gtd::gen_normaliser<T, gtd::pos_normaliser<T>>{};
+                }
+                else {
+                    // if (_v)
+                        return new gtd::gen_normaliser<T, gtd::vel_normaliser<T>>{};
+                    // else
+                    //     return new gtd::gen_normaliser<T>{}; // this is not an option, regex anyway assures this
+                }
+            }
+        }
+    }
+    // return new gtd::mass_normaliser<T>{}; // placeholder until logic above is implemented
 }
 
 int main(int argc, char **argv) {
@@ -48,13 +154,46 @@ int main(int argc, char **argv) {
     bool jpp = parser.get_arg("--just_preprocess", false); // only preprocess data in `data_dir`, don't run neural net
     bool pp = parser.get_arg("--preprocess", false); // preprocess data in `data_dir` and run neural net
     bool npp = parser.get_arg("--not_preprocessed", false); // data in `data_dir` isn't preprocessed and shouldn't be
+    const char *norm_str = parser.get_arg(std::regex{R"(^--norm=(m|l)?t?p?v?$)"}); // improve this regex
     if (jpp) {
         if (pp || npp)
             pp_error();
+        try {
+            gtd::normaliser<long double> *nptr = get_normaliser<long double>(norm_str);
+            gtd::preprocess(data_dir, *nptr);
+            delete nptr;
+        } catch (const std::exception&) {
+            try {
+                gtd::normaliser<double> *nptr = get_normaliser<double>(norm_str);
+                gtd::preprocess(data_dir, *nptr);
+                delete nptr;
+            } catch (const std::exception&) {
+                try {
+                    gtd::normaliser<float> *nptr = get_normaliser<float>(norm_str);
+                    gtd::preprocess(data_dir, *nptr);
+                    delete nptr;
+                } catch (const std::exception&) {
+                    std::cerr << "Error: unrecognised floating point data type in data files.\n";
+                    return 1;
+                }
+            }
+        }
+        return 0;
+    }
+    if (pp) {
+        if (npp)
+            pp_error();
+    }
+    if (npp) {
 
     }
-    const char *afunc_arg = parser.get_arg("--activation");
-    uint64_t num_passes = parser.get_arg("--num_passes", DEF_NUM_PASSES);
+    const char *layers = parser.get_arg(std::regex{R"(^--layers=\d+-\d+:\d+(,\d+-\d+:\d+)*$)"});
+    if (!layers)
+        layers = "--layers=22-128:1,128-64:1,64-18:0";
+    const char *ftype = parser.get_arg("--fp_type");
+    if (!ftype)
+        ftype = "long double";
+    /* uint64_t num_passes = parser.get_arg("--num_passes", DEF_NUM_PASSES);
     if (!num_passes) {
         std::cerr << "Error: number of passes over entire dataset cannot be zero.\n";
         return 1;
@@ -78,6 +217,6 @@ int main(int argc, char **argv) {
     std::mt19937_64 rng{std::random_device{}()};
     while (pass++ < num_passes) {
         std::shuffle(files.begin(), files.end(), rng); // shuffle .3bod files so pass over them isn't in the same order
-    }
+    } */
     return 0;
 }

@@ -30,7 +30,7 @@ template <typename T>
 using htype = typename gtd::f3bodr<T>::hdr_t;
 
 [[noreturn]] void log_no_readings() {
-    std::cerr << BOLD_TXT(MAGENTA_TXT("No evolutions recorded in .3bod file.\n"));
+    std::cerr << BOLD_TXT(MAGENTA_TXT("No evolutions recorded in .3bod/.3bodpp file.\n"));
     exit(1);
 }
 
@@ -62,6 +62,8 @@ using htype = typename gtd::f3bodr<T>::hdr_t;
 
 void *masses{}; // pointer to masses (only used for acc/e/com calculations)
 char *path{};
+void *rdr{};
+gtd::parser *prsr{};
 
 // std::vector<void*> to_free = {masses, path};
 
@@ -70,8 +72,14 @@ void free_masses() {
     delete [] ((T*) masses);
 }
 
-void free_path() {
+void free_path_and_parser() {
     delete [] path;
+    delete prsr;
+}
+
+template <typename T> requires (std::is_floating_point_v<T>)
+void free_reader() {
+    delete ((gtd::f3bodr<T>*) rdr);
 }
 
 #pragma pack(push, 1) // not really necessary, since it's guaranteed that `sizeof(T)` >= 4
@@ -407,12 +415,12 @@ std::pair<uint64_t, uint64_t> get_indices(const char *str, const htype<T> &hdr) 
     }
     if (idx1 >= hdr.N) {
         std::cerr << BOLD UDL ERRCOL "Error:" UDLRST ERRTCOL " starting index" NNCOL << idx1 << ERRTCOL
-        " in range is out-of-bounds for a .3bod file with " NNCOL << hdr.N << ERRTCOL " entries.\n";
+        " in range is out-of-bounds for a .3bod/.3bodpp file with " NNCOL << hdr.N << ERRTCOL " entries.\n";
         exit(1);
     }
     if (idx2 >= hdr.N) {
         std::cerr << BOLD UDL ERRCOL "Error:" UDLRST ERRTCOL " end index" NNCOL << idx2 << ERRTCOL
-        " in range is out-of-bounds for a .3bod file with " NNCOL << hdr.N << ERRTCOL " entries.\n";
+        " in range is out-of-bounds for a .3bod/.3bodpp file with " NNCOL << hdr.N << ERRTCOL " entries.\n";
         exit(1);
     }
     return {idx1, idx2};
@@ -441,8 +449,8 @@ template <typename T, bool POS, bool VEL, bool ACC, bool COM, bool ENERGY> requi
     uint64_t idx = to_uint64(action);
     const htype<T> &hdr = reader.header();
     if (idx >= hdr.N) {
-        std::cerr << BOLD UDL ERRCOL "Error:" UDLRST ERRTCOL " specified index is out-of-range for a .3bod file with "
-        NNCOL << hdr.N << ERRTCOL " entries.\n";
+        std::cerr << BOLD UDL ERRCOL "Error:" UDLRST ERRTCOL " specified index is out-of-range for a .3bod/.3bodpp "
+                                                             "file with " NNCOL << hdr.N << ERRTCOL " entries.\n";
         exit(1);
     }
     char *hyphens = get_hyphens(idx);
@@ -579,7 +587,8 @@ template <typename T> requires (std::is_floating_point_v<T>)
             min_vels[2].second = counter;
         }
         ++it;
-        std::cout << RST ICHCOL "\rProcessed epoch \033[38;5;214m" BOLD << counter++ << "\033[38;5;226m/\033[38;5;10m" << idx_hi;
+        std::cout << RST ICHCOL "\rProcessed epoch \033[38;5;214m" BOLD << counter++ << "\033[38;5;226m/\033[38;5;10m"
+                  << idx_hi;
         std::cout.flush();
     }
 #define EQUALS "\033[38;5;51m = " NNCOL
@@ -801,20 +810,20 @@ template <typename T> requires (std::is_floating_point_v<T>)
 }
 
 int main(int argc, char **argv) {
-    if (atexit(free_path)) {
+    if (atexit(free_path_and_parser)) {
         std::cerr << BOLD ERRCOL UDL "Error:" UDLRST ERRTCOL " \"atexit\" error.\n";
         return 1;
     }
-    gtd::parser parser{argc, argv};
-    char *fpath = const_cast<char*>(parser.get_arg("--file"));
+    prsr = new gtd::parser{argc, argv};
+    char *fpath = const_cast<char*>(prsr->get_arg("--file"));
     bool free_path = false;
     if (!fpath)
-        fpath = const_cast<char*>(parser.get_arg("-f"));
+        fpath = const_cast<char*>(prsr->get_arg("-f"));
     if (!fpath) { // if no path to a .3bod file is given, I take the latest modified one found using directory entries
         DIR *dir = opendir(".");
         if (!dir) {
-            std::cerr << BOLD UDL ERRCOL "Error:" UDLRST ERRTCOL " no path to .3bod file provided and could not open "
-                         "current directory to search for .3bod files.\n";
+            std::cerr << BOLD UDL ERRCOL "Error:" UDLRST ERRTCOL " no path to .3bod/.3bodpp file provided and could "
+                         "not open current directory to search for .3bod files.\n";
             return 1;
         }
         struct dirent *entry;
@@ -827,7 +836,7 @@ int main(int argc, char **argv) {
         fpath = new char[max_len + 1]{}; // need to allocate memory as `entry` points to a changing static `dirent`
         path = fpath;
         while ((entry = readdir(dir))) {
-            if (gtd::endswith(entry->d_name, ".3bod")) {
+            if (gtd::endswith(entry->d_name, ".3bod") || gtd::endswith(entry->d_name, ".3bodpp")) {
                 if (stat(entry->d_name, &buff) != -1) { // ignore error and continue onto next file
                     if (BUFF_SEC > latest_s || (BUFF_SEC == latest_s && BUFF_NSEC > latest_ns)) {
                         gtd::strcpy_c(fpath, entry->d_name);
@@ -839,7 +848,8 @@ int main(int argc, char **argv) {
         }
         closedir(dir);
         if (!*fpath) {
-            std::cerr << BOLD UDL ERRCOL "Error:" UDLRST ERRTCOL " no .3bod files found in current directory.\n";
+            std::cerr << BOLD UDL ERRCOL "Error:" UDLRST ERRTCOL " no .3bod or .3bodpp files found in current "
+                                                                 "directory.\n";
             return 1;
         }
         free_path = true;
@@ -848,7 +858,8 @@ int main(int argc, char **argv) {
     // Maybe manually open file here first to check its integrity
     try {
         try {
-            gtd::f3bodr<long double> reader{fpath};
+            rdr = new gtd::f3bodr<long double>{fpath};
+            // gtd::f3bodr<long double> reader{fpath};
             if (free_path) {
                 delete [] fpath; // delete `fpath` and set `path` to `nullptr` so that my registered function does not
                 path = nullptr; // attempt to free it
@@ -857,16 +868,22 @@ int main(int argc, char **argv) {
                 std::cerr << BOLD ERRCOL UDL "Error:" UDLRST ERRTCOL " \"atexit\" error.\n";
                 return 1;
             }
-            perform_action(reader, parser);
+            if (atexit(free_reader<long double>)) {
+                std::cerr << BOLD ERRCOL UDL "Error:" UDLRST ERRTCOL " \"atexit\" error.\n";
+                return 1;
+            }
+            // perform_action(reader, parser);
+            perform_action(*((gtd::f3bodr<long double>*) rdr), *prsr);
         }
         catch (const gtd::invalid_3bod_ld_size&) {
             std::cerr << BOLD ERRCOL UDL "Error:" UDLRST ERRTCOL " \"" HDFCOL "sizeof(long double)" ERRTCOL
-            "\" does not match that reported in the .3bod file.\n";
+            "\" does not match that reported in the .3bod/.3bodpp file.\n";
             return 1;
         }
         catch (const gtd::invalid_3bod_T_size&) {
             try {
-                gtd::f3bodr<double> reader{fpath};
+                rdr = new gtd::f3bodr<double>{fpath};
+                // gtd::f3bodr<double> reader{fpath};
                 if (free_path) {
                     delete [] fpath;
                     path = nullptr;
@@ -875,10 +892,16 @@ int main(int argc, char **argv) {
                     std::cerr << BOLD ERRCOL UDL "Error:" UDLRST ERRTCOL " \"atexit\" error.\n";
                     return 1;
                 }
-                perform_action(reader, parser);
+                if (atexit(free_reader<double>)) {
+                    std::cerr << BOLD ERRCOL UDL "Error:" UDLRST ERRTCOL " \"atexit\" error.\n";
+                    return 1;
+                }
+                // perform_action(reader, parser);
+                perform_action(*((gtd::f3bodr<double>*) rdr), *prsr);
             } catch (const gtd::invalid_3bod_T_size&) {
                 try {
-                    gtd::f3bodr<float> reader{fpath};
+                    rdr = new gtd::f3bodr<float>{fpath};
+                    // gtd::f3bodr<float> reader{fpath};
                     if (free_path) {
                         delete [] fpath;
                         path = nullptr;
@@ -887,7 +910,12 @@ int main(int argc, char **argv) {
                         std::cerr << BOLD ERRCOL UDL "Error:" UDLRST ERRTCOL " \"atexit\" error.\n";
                         return 1;
                     }
-                    perform_action(reader, parser);
+                    if (atexit(free_reader<float>)) {
+                        std::cerr << BOLD ERRCOL UDL "Error:" UDLRST ERRTCOL " \"atexit\" error.\n";
+                        return 1;
+                    }
+                    // perform_action(reader, parser);
+                    perform_action(*((gtd::f3bodr<float>*) rdr), *prsr);
                 } catch (const gtd::invalid_3bod_T_size&) {
                     std::cerr << BOLD_TXT(MAGENTA_TXT("Error: "))
                     YELLOW_TXT("reported floating point data type size does not match the size of a ")
@@ -900,7 +928,7 @@ int main(int argc, char **argv) {
         }
     }
     catch (const gtd::invalid_3bod_format &e) {
-        std::cerr << BOLD ERRCOL UDL "Error:" UDLRST ERRTCOL " invalid .3bod format.\n";
+        std::cerr << BOLD ERRCOL UDL "Error:" UDLRST ERRTCOL " invalid .3bod/.3bodpp format.\n";
         return 1;
     }
     return 0;

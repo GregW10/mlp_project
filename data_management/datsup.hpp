@@ -150,6 +150,8 @@ namespace gtd {
         std::invalid_argument{"Error: the required offset for indexing the iterator is out-of-bounds.\n"} {}
         explicit iterator_index_error(const char *msg) : std::invalid_argument{msg} {}
     };
+    template <typename T> requires (std::is_floating_point_v<T>)
+    class normaliser;
     template <isNumWrapper T, bool, bool>
     requires (std::is_floating_point_v<T> && sizeof(T) <= 255 && sizeof(long double) < 127)
     class f3bodr;
@@ -317,7 +319,7 @@ namespace gtd {
             entry_type *_arr; // array allocated to hold all positions and velocities at each iteration
             entry_type *_ptr; // pointer to current entry within array
             int64_t pos{}; // position of current entry within array
-            bool cpy = false; // boolean indicating whether `*this` has been copy constructed
+            bool cpy = true; // boolean indicating whether `*this` has been copy constructed
             // private ctors only for internal use:
             entry_it() : tot{0}, _arr{nullptr}, _ptr{nullptr}, cpy{true} {}
             entry_it(uint64_t _tot, entry_type *_array, entry_type *_entry, int64_t _pos, bool _copy) noexcept :
@@ -328,24 +330,34 @@ namespace gtd {
             entry_it end_it() const noexcept {
                 return {tot, _arr, _arr + tot, tot, true};
             }
-        public:
-            entry_it(std::ifstream &_in, uint64_t tot_num) : tot{tot_num} {
+            entry_it(std::ifstream &_in, uint64_t tot_num) : tot{tot_num}, cpy{false} {
+                /* This constructs the "original" `entry_it<true>` object and, thus, is the only one in which `cpy` is
+                 * false, as it is the one in charge of freeing the memory pointed to by `_arr`. Any other iterators
+                 * constructed any other way are copies and will thus have `cpy` set to `true`. This approach crucially
+                 * avoids attempting to free the same block of memory twice. */
                 if (!_in.good())
                     throw std::ios_base::failure{"Error: could not read from file.\n"};
                 this->_arr = new entry_type[tot_num];
                 _in.read((char *) this->_arr, sizeof(entry_type)*tot_num);
                 _ptr = _arr; // + `pos` is already zero
             }
+        public:
             entry_it(entry_it &&other) noexcept : tot{other.tot}, _arr{other._arr}, _ptr{other._ptr}, pos{other.pos} {
+                if (!other.cpy) { // case for other being original array owner, so must transfer ownership
+                    this->cpy = false;
+                    other.cpy = true;
+                } else { // case for other being a copy, so this one cannot be an owner either
+                    this->cpy = true;
+                }
                 other.tot = 0;
                 other._arr = nullptr;
                 other._ptr = nullptr;
                 other.pos = -1;
-                other.cpy = true;
+                // other.cpy = true;
                 // memory moved here, so `this->cpy` must remain false
             }
             entry_it(const entry_it &other) :
-                tot{other.tot}, _arr{other._arr}, _ptr{other._ptr}, pos{other.pos}, cpy{true} {}
+                tot{other.tot}, _arr{other._arr}, _ptr{other._ptr}, pos{other.pos} /* , cpy{true} */ {}
             int64_t position() const noexcept {
                 return this->pos;
             }
@@ -404,6 +416,8 @@ namespace gtd {
             entry_it &operator=(const entry_it &other) {
                 if (&other == this)
                     return *this;
+                if (!cpy)
+                    delete [] this->_arr; // must relinquish ownership of the array as it's being assigned to a new one
                 this->tot = other.tot;
                 this->_arr = other._arr;
                 this->_ptr = other._ptr;
@@ -414,16 +428,24 @@ namespace gtd {
             entry_it &operator=(entry_it &&other) noexcept {
                 if (&other == this) // would be possible if `std::move` were used
                     return *this;
+                if (!cpy)
+                    delete [] this->_arr;
                 this->tot = other.tot;
                 this->_arr = other._arr;
                 this->_ptr = other._ptr;
                 this->pos = other.pos;
-                this->cpy = false;
+                if (!other.cpy) { // case for other being original array owner, so must transfer ownership
+                    this->cpy = false;
+                    other.cpy = true;
+                } else { // case for other being a copy, so this one cannot be an owner either
+                    this->cpy = true;
+                }
+                // this->cpy = false;
                 other.tot = 0;
                 other._arr = nullptr;
                 other._ptr = nullptr;
                 other.pos = -1;
-                other.cpy = true;
+                // other.cpy = true;
                 return *this;
             }
             void stop() {
@@ -436,6 +458,7 @@ namespace gtd {
                 cpy = true;
             }
             ~entry_it() {
+                // std::cout << "Will delete: " << std::boolalpha << !this->cpy << std::endl;
                 if (!cpy) // avoids attempting to deallocate the same memory twice, which is undefined behaviour
                     delete [] this->_arr;
             }
@@ -511,6 +534,8 @@ namespace gtd {
             friend class vel_normaliser;
             template <typename U> requires (std::is_floating_point_v<U>)
             friend class log_vel_normaliser;
+            template <typename U> requires (std::is_floating_point_v<U>)
+            friend std::pair<std::string, std::vector<std::string>> preprocess(const char*, normaliser<U>&);
         };
         template <bool _chk>
         class entry_it<false, _chk> {
@@ -786,6 +811,8 @@ namespace gtd {
         using hdr_t = typename f3bodw<T>::header;
         using iterator_type = entry_it<alloc, bnd_chk>;
         explicit f3bodr(const char *path) {
+            if (!path)
+                throw std::invalid_argument{"Error: path to .3bod/.3bodpp file cannot be nullptr.\n"};
             struct stat buff{};
             if (stat(path, &buff) == -1)
                 throw std::invalid_argument{"Error: .3bod/.3bodpp file provided does not exist.\n"};
@@ -832,6 +859,9 @@ namespace gtd {
         void close() {
             this->_it.stop();
         }
+        // ~f3bodr() {
+        //     std::cout << "f3bodr<T> destructor called." << std::endl;
+        // }
         template <typename U> requires (std::is_floating_point_v<U>)
         friend class normaliser;
         template <typename U> requires (std::is_floating_point_v<U>)
@@ -846,6 +876,8 @@ namespace gtd {
         friend class vel_normaliser;
         template <typename U> requires (std::is_floating_point_v<U>)
         friend class log_vel_normaliser;
+        template <typename U> requires (std::is_floating_point_v<U>)
+        friend std::pair<std::string, std::vector<std::string>> preprocess(const char*, normaliser<U>&);
     };
     // Here I define a trivial class used to compare two `std::thread` objects, such that `std::thread` objects can be
     // added to an `std::set`, where the `Compare` type is set to `thread_comparator`:

@@ -19,7 +19,7 @@ namespace gtd {
         T _mvel{}; // maximum absolute velocity component
         virtual h_type *normalise_header(h_type*) const = 0;
         virtual e_type *normalise_entry(e_type*) const = 0;
-        virtual consteval uint64_t get_id() const noexcept = 0;
+        constexpr virtual uint64_t get_id() const noexcept {return 0;}
     public:
 #pragma pack(push, 1)
         struct normv_file {
@@ -39,7 +39,7 @@ namespace gtd {
         normaliser(T max_mass, T min_mass, long double max_time, T max_abs_poscomp, T max_abs_velcomp) :
         _mmass{max_mass}, _nmass{min_mass}, _mtime{max_time}, _mpos{max_abs_poscomp}, _mvel{max_abs_velcomp} {
             if (_mmass < 0 || _nmass < 0 || _mtime < 0 || _mpos < 0 || _mvel < 0)
-                throw std::invalid_argument{"Error: all maximum values passed must be non-negative.\n"};
+                throw std::invalid_argument{"Error: all maximum/minimum values passed must be non-negative.\n"};
             if (_nmass > _mmass)
                 throw std::invalid_argument{"Error: minimum mass cannot be greater than maximum mass.\n"};
         }
@@ -64,11 +64,17 @@ namespace gtd {
         virtual void max_mass(T _new_val) {
             if (_new_val < 0)
                 throw std::invalid_argument{"Error: max. mass val. must be non-negative.\n"};
+            if (_new_val < this->_nmass)
+                throw std::invalid_argument{"Error: max. mass cannot be less than current min. mass. If you wish to "
+                                            "reduce both, please set min. mass first.\n"};
             _mmass = _new_val;
         }
         virtual void min_mass(T _new_val) {
             if (_new_val < 0)
                 throw std::invalid_argument{"Error: min. mass val. must be non-negative.\n"};
+            if (_new_val > this->_mmass)
+                throw std::invalid_argument{"Error: min. mass cannot be greater than current max. mass. If you wish to "
+                                            "increase both, please set max. mass first.\n"};
             _nmass = _new_val;
         }
         virtual void max_time(long double _new_val) {
@@ -86,13 +92,11 @@ namespace gtd {
                 throw std::invalid_argument{"Error: max. vel. val. must be non-negative.\n"};
             _mvel = _new_val;
         }
-        virtual void operator()(const std::string &input, const std::string &output) {
+        virtual std::ofstream::pos_type operator()(const std::string &input, const std::string &output) {
             f3bodr<T> reader{input.c_str()};
             std::ofstream out{output, std::ios_base::out | std::ios_base::binary};
-            if (!out.good()) {
-                std::cerr << "Error: could not open file \"" << output << "\".\n";
-                exit(1);
-            }
+            if (!out.good())
+                throw std::ios_base::failure{"Error: could not open output .3bodpp file.\n"};
             reader.hdr.hd[1] = 'P';
             out.write((char *) normalise_header(&reader.hdr), sizeof(h_type));
             e_type *_entries = reader._it._arr;
@@ -101,7 +105,12 @@ namespace gtd {
             while (counter --> 0)
                 normalise_entry(_entry++);
             out.write((char *) _entries, reader.hdr.N*sizeof(e_type));
+            std::ofstream::pos_type _pos = out.tellp();
             out.close();
+            return _pos;
+        }
+        consteval size_t normv_fsize() const noexcept { // returns the size of a .normv file for the given `T` type
+            return sizeof(normv_file);
         }
         std::ofstream::pos_type write_normv(const char *path) const {
             /* Writes the maximum values to a .normv file. The file format of a .normv file is as follows:
@@ -110,21 +119,12 @@ namespace gtd {
              *     - 4 bytes: `sizeof(long double)`
              *     - 4 bytes: `sizeof(uint64_t)`
              *     - `sizeof(uint64_t)` bytes: ID of normaliser
-             *     - `3*sizeof(T) + sizeof(long double)` bytes: Maximum values, in same order of class */
+             *     - `4*sizeof(T) + sizeof(long double)` bytes: Maximum/minimum values, in same order of class */
             if (!path)
                 throw std::invalid_argument{"Error: path for .normv file cannot be nullptr.\n"};
             std::ofstream out{path, std::ios_base::out | std::ios_base::binary};
             if (!out.good())
                 throw std::ios_base::failure{"Error: could not open .normv file for writing.\n"};
-            /* out.write(_normv_hdr, 4*sizeof(char));
-            out.write((char *) &_sizeof_T, sizeof(uint32_t));
-            out.write((char *) &_sizeof_ld, sizeof(uint32_t));
-            out.write((char *) &_sizeof_u64, sizeof(uint32_t));
-            out.write((char *) &_id, sizeof(uint64_t));
-            out.write((char *) &_mmass, sizeof(T));
-            out.write((char *) &_mtime, sizeof(long double));
-            out.write((char *) &_mpos, sizeof(T));
-            out.write((char *) &_mvel, sizeof(T)); */
             normv_file _f;
             _f._id = get_id();
             _f._maxm = _mmass;
@@ -155,7 +155,7 @@ namespace gtd {
             in.close();
             if (adopt_values) {
                 if (_f._maxm < 0 || _f._minm < 0 || _f._maxt < 0 || _f._maxp < 0 || _f._maxv < 0)
-                    throw std::invalid_argument{"Error: all maximum values passed must be non-negative.\n"};
+                    throw std::invalid_argument{"Error: all max./min. values must be non-negative.\n"};
                 if (_f._minm > _f._maxm)
                     throw std::invalid_argument{"Error: minimum mass cannot be greater than maximum mass.\n"};
                 this->_mmass = _f._maxm;
@@ -166,10 +166,12 @@ namespace gtd {
             }
             return _f;
         }
+        virtual ~normaliser() = default; // required for deleting derived class object through base class pointer
     };
     template <typename T> requires (std::is_floating_point_v<T>)
     class mass_normaliser : virtual public normaliser<T> {
-        consteval uint64_t get_id() const noexcept override {
+    protected:
+        constexpr uint64_t get_id() const noexcept override {
             return 0b00000001; // 1
         }
         using typename normaliser<T>::h_type;
@@ -190,8 +192,9 @@ namespace gtd {
     };
     template <typename T> requires (std::is_floating_point_v<T>)
     class log_mass_normaliser : public virtual normaliser<T> {
+    protected:
         T _lmax;
-        consteval uint64_t get_id() const noexcept override {
+        constexpr uint64_t get_id() const noexcept override {
             return 0b00000010; // 2
         }
         using typename normaliser<T>::h_type;
@@ -209,6 +212,7 @@ namespace gtd {
             return _e; // log_mass_normaliser performs no action on positions or velocities
         }
     public:
+        log_mass_normaliser() = default;
         log_mass_normaliser(T max_mass, T min_mass, T max_time, T max_pcomp, T max_vcomp) :
         normaliser<T>{max_mass, min_mass, max_time, max_pcomp, max_vcomp} {
             T _logmax = std::log10(max_mass);
@@ -218,22 +222,18 @@ namespace gtd {
             _lmax = _logmax > _logmin ? _logmax : _logmin;
         }
         void max_mass(T _new_val) override {
-            if (_new_val < 0)
-                throw std::invalid_argument{"Error: max. mass val. must be non-negative.\n"};
-            normaliser<T>::_mmass = _new_val;
+            normaliser<T>::max_mass(_new_val); // takes care of exceptions
             T _logmax = std::log10(_new_val);
             _logmax = ABS(_logmax);
             if (_logmax > _lmax)
                 _lmax = _logmax;
         }
         void min_mass(T _new_val) override {
-            if (_new_val < 0)
-                throw std::invalid_argument{"Error: min. mass val. must be non-negative.\n"};
-            normaliser<T>::_nmass = _new_val;
-            T _logmax = std::log10(_new_val);
-            _logmax = ABS(_logmax);
-            if (_logmax > _lmax)
-                _lmax = _logmax;
+            normaliser<T>::min_mass(_new_val);
+            T _logmin = std::log10(_new_val);
+            _logmin = ABS(_logmin);
+            if (_logmin > _lmax)
+                _lmax = _logmin;
         }
         typename normaliser<T>::normv_file load_normv(const char *path, bool adopt_values = true) {
             if (!adopt_values)
@@ -249,7 +249,8 @@ namespace gtd {
     };
     template <typename T> requires (std::is_floating_point_v<T>)
     class time_normaliser : public virtual normaliser<T> {
-        consteval uint64_t get_id() const noexcept override {
+    protected:
+        constexpr uint64_t get_id() const noexcept override {
             return 0b00000100; // 4
         }
         using typename normaliser<T>::h_type;
@@ -269,7 +270,8 @@ namespace gtd {
     };
     template <typename T> requires (std::is_floating_point_v<T>)
     class pos_normaliser : public virtual normaliser<T> {
-        consteval uint64_t get_id() const noexcept override {
+    protected:
+        constexpr uint64_t get_id() const noexcept override {
             return 0b00001000; // 8
         }
         using typename normaliser<T>::h_type;
@@ -292,7 +294,8 @@ namespace gtd {
     };
     template <typename T> requires (std::is_floating_point_v<T>)
     class vel_normaliser : public virtual normaliser<T> {
-        consteval uint64_t get_id() const noexcept override {
+    protected:
+        constexpr uint64_t get_id() const noexcept override {
             return 0b00010000; // 16
         }
         using typename normaliser<T>::h_type;
@@ -302,8 +305,8 @@ namespace gtd {
             return _h;
         }
         e_type *normalise_entry(e_type *_e) const override {
-            /* Divides all position components by the largest absolute value position component such that all normalised
-             * position components fall within [-1,1]. */
+            /* Divides all position components by the largest absolute value velocity component such that all normalised
+             * velocity components fall within [-1,1]. */
             T *ptr = (T*) _e->velocities;
             unsigned int counter = 9;
             while (counter --> 0)
@@ -320,11 +323,12 @@ namespace gtd {
     template <typename T, typename ...Args> requires (std::is_floating_point_v<T> && sizeof...(Args) > 0 &&
                                                      (std::is_base_of_v<normaliser<T>, Args> && ...))
     class gen_normaliser : public Args... {
-        consteval uint64_t get_id() const noexcept override {
+    protected:
+        constexpr uint64_t get_id() const noexcept override {
             return (Args::get_id() | ...); // take bitwise OR of all IDs of parent classes
         }
-        using typename normaliser<T>::h_type;
-        using typename normaliser<T>::e_type;
+        using h_type = typename f3bodr<T>::hdr_t;
+        using e_type = typename f3bodr<T>::entry_type;
         h_type *normalise_header(h_type *_h) const override {
             return (Args::normalise_header(_h), ...);
         }
@@ -332,10 +336,11 @@ namespace gtd {
             return (Args::normalise_entry(_e), ...);
         }
     public:
-        using normaliser<T>::normaliser;
+        // using normaliser<T>::normaliser;
+        gen_normaliser() = default;
     };
     template <typename T> requires (std::is_floating_point_v<T>)
-    std::pair<std::string, std::vector<std::string>> preprocess(const char *dpath, const normaliser<T> &_norm) {
+    std::pair<std::string, std::vector<std::string>> preprocess(const char *dpath, normaliser<T> &_norm) {
         /* Preprocesses the entire dataset. Goes through all .3bod files in given directory, finds max. values, uses
          * these to normalise the data in each .3bod file, placing the normalised data into each corresponding .3bodpp
          * file in a newly created directory. */
@@ -368,7 +373,7 @@ namespace gtd {
             if (gtd::endswith(entry->d_name, ".3bod")) {
                 fpath += entry->d_name;
                 f3bodr<T> reader{fpath.c_str()}; // might throw due to `T` mismatch, catch outside
-                header = &reader.header();
+                header = &reader.hdr;
                 if (!header->N)
                     continue; // empty .3bod files do not get considered
                 counter = 0;
@@ -409,8 +414,12 @@ namespace gtd {
             std::cerr << "Error: no .3bod files found within directory \"" << dpath << "\"\n";
             exit(1);
         }
-        fpath.pop_back(); // remove the trailing slash
-        fpath += "_preprocessed_";
+        if (!str_eq(dpath, ".")) {
+            fpath.pop_back(); // remove the trailing slash
+            fpath += "_preprocessed_";
+        } else {
+            fpath += "preprocessed_";
+        }
         const char *date_and_time = gtd::get_date_and_time(); // not thread-safe
         fpath += date_and_time; // not thread-safe
         if (mkdir(fpath.c_str(), S_IRWXU | S_IRWXG | S_IRWXO) == -1) {
@@ -418,7 +427,7 @@ namespace gtd {
             exit(1);
         }
         fpath.push_back('/');
-        uint64_t _new_dpath_len = dpath_len + 14 + 25 + 1;
+        uint64_t _new_dpath_len = fpath.size(); /* dpath_len + 14 + 25 + 2; */
         std::vector<std::string> _new_files;
         _new_files.reserve(files.size());
         _norm.max_mass(max_mass);
@@ -428,6 +437,7 @@ namespace gtd {
         _norm.max_vel(max_abs_vcomp);
         for (const std::string &_old_path : files) {
             fpath.append(_old_path.begin() + dpath_len, _old_path.end());
+            fpath += "pp"; // to make the extension .3bodpp ("pp" for "preprocessed")
             _norm(_old_path, fpath);
             _new_files.push_back(fpath);
             fpath.erase(_new_dpath_len);
