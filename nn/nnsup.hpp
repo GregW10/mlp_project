@@ -26,7 +26,7 @@ namespace gtd {
             const char header[4] = {'N', 'O', 'R', 'M'};
             const uint32_t _sizeof_T = sizeof(T);
             const uint32_t _sizeof_ld = sizeof(long double);
-            const uint32_t _sizeof_u64 = sizeof(uint64_t); // always 8
+            // const uint32_t _sizeof_u64 = sizeof(uint64_t); // always 8
             uint64_t _id;
             T _maxm;
             T _minm;
@@ -117,7 +117,6 @@ namespace gtd {
              *     - 4 bytes: Characters 'N', 'O', 'R' and 'M'
              *     - 4 bytes: `sizeof(T)`
              *     - 4 bytes: `sizeof(long double)`
-             *     - 4 bytes: `sizeof(uint64_t)`
              *     - `sizeof(uint64_t)` bytes: ID of normaliser
              *     - `4*sizeof(T) + sizeof(long double)` bytes: Maximum/minimum values, in same order of class */
             if (!path)
@@ -340,7 +339,7 @@ namespace gtd {
         gen_normaliser() = default;
     };
     template <typename T> requires (std::is_floating_point_v<T>)
-    std::pair<std::string, std::vector<std::string>> preprocess(const char *dpath, normaliser<T> &_norm) {
+    std::pair<std::string, std::vector<std::string>*> preprocess(const char *dpath, normaliser<T> &_norm, bool jpp) {
         /* Preprocesses the entire dataset. Goes through all .3bod files in given directory, finds max. values, uses
          * these to normalise the data in each .3bod file, placing the normalised data into each corresponding .3bodpp
          * file in a newly created directory. */
@@ -428,21 +427,33 @@ namespace gtd {
         }
         fpath.push_back('/');
         uint64_t _new_dpath_len = fpath.size(); /* dpath_len + 14 + 25 + 2; */
-        std::vector<std::string> _new_files;
-        _new_files.reserve(files.size());
         _norm.max_mass(max_mass);
         _norm.min_mass(min_mass);
         _norm.max_time(max_sim_time);
         _norm.max_pos(max_abs_pcomp);
         _norm.max_vel(max_abs_vcomp);
+        if (jpp) { // case for just preprocessing - so no need to return preprocessed filenames
+            for (const std::string &_old_path : files) {
+                fpath.append(_old_path.begin() + dpath_len, _old_path.end());
+                fpath += "pp"; // to make the extension .3bodpp ("pp" for "preprocessed")
+                _norm(_old_path, fpath);
+                fpath.erase(_new_dpath_len);
+            }
+            // Write max. values to binary data file
+            fpath += "norm_vals_";
+            fpath += date_and_time;
+            _norm.write_normv((fpath += ".normv").c_str());
+            return {fpath, nullptr}; // nullptr for `std::vector` as the names of the preprocessed files are not needed
+        }
+        std::vector<std::string> *_new_files = new std::vector<std::string>{};
+        _new_files->reserve(files.size());
         for (const std::string &_old_path : files) {
             fpath.append(_old_path.begin() + dpath_len, _old_path.end());
-            fpath += "pp"; // to make the extension .3bodpp ("pp" for "preprocessed")
+            fpath += "pp";
             _norm(_old_path, fpath);
-            _new_files.push_back(fpath);
+            _new_files->push_back(fpath);
             fpath.erase(_new_dpath_len);
         }
-        // Write max. values to binary data file
         fpath += "norm_vals_";
         fpath += date_and_time;
         _norm.write_normv((fpath += ".normv").c_str());
