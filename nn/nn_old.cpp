@@ -9,7 +9,11 @@
 
 #define DEF_NUM_PASSES ((uint64_t) 1'000)
 #define DEF_LR (1/powl(2, 10))
-#define DEF_PPF ((uint64_t) 1'000)
+
+template <typename dtype, typename wtype> requires (std::is_floating_point_v<dtype> && std::is_floating_point_v<wtype>)
+void run_sim() {
+    /* Runs the entire simulation. `dtype` is the data type of the data and `wtype` is the type to use in the NN. */
+}
 
 template <typename T> requires (std::is_floating_point_v<T>)
 gtd::normaliser<T> *get_normaliser(const char *norm_arg) {
@@ -172,25 +176,21 @@ void build_layers(gml::ffnn<W> &_nn, const char *layers) {
     }
 }
 
+template <typename T>
+void entry_to_vector(const typename gtd::f3bodr<T>::entry_type &_e, gml::vector<T> *_v) {
+    // figure out how to know at which offset to start (input vs output vector)
+}
+
 template <typename D, typename W>
-void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
-                      std::unique_ptr<std::vector<std::string>> &val_files,
-                      const char *layer_str,
-                      const char *from_model,
-                      uint64_t num_passes,
-                      uint64_t pairs_per_file,
-                      uint64_t batch_size,
-                      W _lr,
-                      const char *output_nnw,
-                      bool alloc = true) {
-    if (!train_files)
-        throw std::invalid_argument{"Error: pointer to training files std::vector cannot be nullptr.\n"};
-    if (train_files->empty())
+void build_and_run_nn(const std::vector<std::string> &files, const char *layer_str, uint64_t num_passes,
+                      uint64_t pairs_per_file, uint64_t batch_size, W _lr,
+                      const char *from_model, const std::vector<std::string> &val_files, bool alloc = true) {
+    if (files.empty())
         return;
-    typename std::vector<std::string>::size_type num_train_files = train_files->size();
+    typename std::vector<std::string>::size_type train_files = files.size();
     // if (batch_size > train_size)
     //     throw std::invalid_argument{"Error: batch size cannot be greater than number of examples in training set.\n"};
-    if (batch_size > pairs_per_file*num_train_files)
+    if (batch_size > pairs_per_file*train_files)
         throw std::invalid_argument{"Error: batch size cannot be greater than number of examples in training set.\n"};
     if (!batch_size)
         throw std::invalid_argument{"Error: batch size cannot be zero.\n"};
@@ -218,11 +218,9 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
         net.load_model(from_model);
     if (alloc) {
         std::vector<gtd::f3bodr<D>> readers{};
-        readers.reserve(num_train_files);
-        for (const std::string &_str : *train_files)
+        readers.reserve(train_files);
+        for (const std::string &_str : files)
             readers.emplace_back(_str.c_str()); // exception will occur here in case of T mismatch
-        // delete [] train_files;
-        train_files.reset();
         while (tcounter++ < num_passes) {
             std::shuffle(readers.begin(), readers.end(), rng); // to make sure data is never presented in same order
             bcounter = 0;
@@ -269,10 +267,34 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
     if (bcounter) {
         _mloss = net.update_params(_lr);
     }
-    if (output_nnw)
-        net.to_nnw(output_nnw);
-    else
-        net.to_nnw();
+}
+
+template <typename T> requires (std::is_floating_point_v<T>)
+void pproc(const char *data_dir,
+           const char *val_dir,
+           const char *norm_str,
+           gtd::normaliser<T> **ptr,
+           std::vector<std::string> **dppf,
+           std::vector<std::string> **vppf,
+           bool jpp) {
+    if (!ptr)
+        throw std::invalid_argument{"Error: pointer to gtd::normaliser<T> pointer cannot be nullptr.\n"};
+    *ptr = norm_str ? get_normaliser<T>(norm_str) :
+            new gtd::gen_normaliser<T, gtd::mass_normaliser<T>, gtd::time_normaliser<T>>{};
+    if (!*ptr)
+        throw std::invalid_argument{"Empty normalisation string provided.\n"};
+    char *tnorm_vals{};
+    char *vnorm_vals{};
+    gtd::preprocess(data_dir, val_dir, &tnorm_vals, &vnorm_vals, dppf, vppf, **ptr, jpp);
+    // std::pair<std::string, std::vector<std::string>*> _pair = gtd::preprocess(data_dir, val_dir, **ptr, jpp);
+    delete *ptr;
+    std::cout << "Normalisation values within training set written to: \"" << tnorm_vals << "\"\n";
+    delete [] tnorm_vals;
+    if (vnorm_vals) {
+        std::cout << "Normalisation values within training set written to: \"" << vnorm_vals << "\"\n";
+        delete [] vnorm_vals;
+    }
+    // return _pair.second;
 }
 
 int main(int argc, char **argv) {
@@ -301,10 +323,6 @@ int main(int argc, char **argv) {
     }
     const char *norm_str = parser.get_arg(NORM_RGX);
     const char *val_dir = parser.get_arg("--val_dir");
-    // char *normv_tpath{};
-    // char *normv_vpath{};
-    std::unique_ptr<std::vector<std::string>> dppf{};
-    std::unique_ptr<std::vector<std::string>> vppf{};
     if (jpp) {
         if (!parser.empty()) {
             std::cerr << "Error: unrecognised arguments:\n";
@@ -314,77 +332,37 @@ int main(int argc, char **argv) {
                             "means the NN will not be run.\n");
             return 1;
         }
+        gtd::normaliser<long double> *nptr_ld{};
         try {
-            try { // my first time using `std::unique_ptr<>` !!
-#define PP_BLOCK(type, bval) \
-                std::unique_ptr<gtd::normaliser<type>> \
-                normaliser{norm_str ? get_normaliser<type>(norm_str) : \
-                new gtd::gen_normaliser<type, \
-                gtd::mass_normaliser<type>, gtd::time_normaliser<type>>}; \
-                if (!normaliser) { \
-                    std::cerr << "Error: invalid normaliser argument provided (empty).\n"; \
-                    return 1; \
-                } \
-                gtd::preprocess(data_dir, val_dir, dppf, vppf, *normaliser, bval);
-                PP_BLOCK(long double, true)
-            } catch (const gtd::invalid_3bod_format&) {
+            pproc<long double>(data_dir, val_dir, norm_str, &nptr_ld, true);
+        } catch (const std::invalid_argument &e) {
+            std::cerr << "Error: " << e.what() << '\n';
+            return 1;
+        } catch (const std::exception&) {
+            delete [] *nptr_ld;
+            gtd::normaliser<double> *nptr_d{};
+            try {
+                pproc<double>(data_dir, val_dir, norm_str, &nptr_d, true);
+            } catch (const std::exception&) {
+                delete [] *nptr_d;
+                gtd::normaliser<float> *nptr_f{};
                 try {
-                    PP_BLOCK(double, true)
-                } catch (const gtd::invalid_3bod_format&) {
-                    try {
-                        PP_BLOCK(float, true)
-                    } catch (const gtd::invalid_3bod_format &_inv) {
-                        std::cerr << "Error: " << _inv.what() << ".\n";
-                        return 1;
-                    }
+                    pproc<float>(data_dir, val_dir, norm_str, &nptr_f, true);
+                } catch (const std::exception &e) {
+                    delete [] *nptr_f;
+                    std::cerr << "Error: " << e.what() << '\n';
+                    return 1;
                 }
             }
-        } catch (const std::exception &_e) {
-            std::cerr << "Error: " << _e.what() << '\n';
-            return 1;
         }
-        // delete [] normv_tpath;
-        // delete [] normv_vpath;
         return 0;
     } // after this block it is certain the NN will be run
     const char *ftype = parser.get_arg("--fp_type"); // floating point type of weights and biases in NN
-    long double learning_rate = parser.get_arg("--learning_rate", std::numeric_limits<long double>::quiet_NaN());
-    if (learning_rate != learning_rate)
-        learning_rate = DEF_LR;
-    else {
-        if (learning_rate <= 0) {
-            std::cerr << "Error: learning rate must be positive.\n";
-            return 1;
-        }
-    }
-    uint64_t num_passes = parser.get_arg("--num_passes", DEF_NUM_PASSES);
-    if (!num_passes) {
-        std::cerr << "Error: number of passes over entire dataset cannot be zero.\n";
-        return 1;
-    }
-    uint64_t pairs_per_file = parser.get_arg("--pairs_per_file", DEF_PPF);
-    if (!pairs_per_file) {
-        std::cerr << "Error: number of pairs per file must be positive.\n";
-        return 1;
-    }
-    uint64_t batch_size = parser.get_arg("--batch_size", DEF_PPF);
-    if (!batch_size) {
-        std::cerr << "Error: batch size must be positive.\n";
-        return 1;
-    }
-    bool allocate_dataset = parser.get_arg("--allocate_dataset", true);
-    const char *model_str = parser.get_arg("--from_model");
     const char *layers = parser.get_arg(LAYERS_RGX);
-    if (model_str) {
-        if (layers) {
-            std::cerr << "Error: both the model from which to load and the layout of the NN cannot be specified.\n";
-            return 1;
-        }
-    } else {
-        if (!layers)
-            layers = "--layers=22-128:1,128-64:1,64-18:0";
-    }
-    const char *weights_path = parser.get_arg("--weights_filepath");
+    if (!layers)
+        layers = "--layers=22-128:1,128-64:1,64-18:0";
+    long double learning_rate = parser.get_arg("--learning_rate", std::numeric_limits<long double>::quiet_NaN());
+    uint64_t num_passes = parser.get_arg("--num_passes", DEF_NUM_PASSES);
     if (!parser.empty()) {
         std::cerr << "Error: unrecognised arguments:\n";
         for (const char &*arg : parser)
@@ -408,92 +386,76 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
-    // bool d_ld = false;
-    // bool d_d = false;
-    // bool d_f = false;
+    std::vector<std::string> *_files{};
+    bool d_ld = false;
+    bool d_d = false;
+    bool d_f = false;
     if (pp) {
+        gtd::normaliser<long double> *nptr_ld{};
         try {
+            _files = pproc<long double>(data_dir, val_dir, norm_str, &nptr_ld, false);
+            d_ld = true;
+        } catch (const std::invalid_argument &e) {
+            std::cerr << "Error: " << e.what() << '\n';
+            return 1;
+        } catch (const std::exception&) {
+            delete [] *nptr_ld;
+            gtd::normaliser<double> *nptr_d{};
             try {
-                PP_BLOCK(long double, false)
-#define NN_BLOCK(type) \
-                if (nn_ld) \
-                    build_and_run_nn<type, long double>(dppf, vppf, layers, model_str, num_passes, \
-                                                        pairs_per_file, batch_size, learning_rate, weights_path, \
-                                                        allocate_dataset); \
-                else if (nn_d) \
-                    build_and_run_nn<type, double>(dppf, vppf, layers, model_str, num_passes, \
-                                                   pairs_per_file, batch_size, learning_rate, weights_path, \
-                                                   allocate_dataset); \
-                else \
-                    build_and_run_nn<type, float>(dppf, vppf, layers, model_str, num_passes, \
-                                                  pairs_per_file, batch_size, learning_rate, weights_path, \
-                                                  allocate_dataset);
-                NN_BLOCK(long double)
-            } catch (const gtd::invalid_3bod_format&) {
+                _files = pproc<double>(data_dir, val_dir, norm_str, &nptr_d, false);
+                d_d = true;
+            } catch (const std::exception&) {
+                delete [] *nptr_d;
+                gtd::normaliser<float> *nptr_f{};
                 try {
-                    PP_BLOCK(double, false)
-                    NN_BLOCK(double)
-                } catch (const gtd::invalid_3bod_format&) {
-                    try {
-                        PP_BLOCK(float, false)
-                        NN_BLOCK(float)
-                    } catch (const gtd::invalid_3bod_format &_inv) {
-                        std::cerr << "Error: " << _inv.what() << '\n';
-                        return 1;
-                    }
-                }
-            }
-        } catch (const std::exception &_e) {
-            std::cerr << "Error: " << _e.what() << '\n';
-            return 1;
-        }
-        return 0;
-    }
-    else if (npp) {
-        dppf.reset(gtd::find_files(data_dir, ".3bod"));
-        if (!dppf) {
-            std::cerr << "Error: could not find any training .3bod files in directory \"" << data_dir << "\".\n";
-            return 1;
-        }
-        if (val_dir) {
-            vppf.reset(gtd::find_files(val_dir, ".3bod"));
-            if (!vppf) {
-                std::cerr << "Error: could not find any validation .3bod files in directory \"" << val_dir << "\".\n";
-                return 1;
-            }
-        }
-    } else {
-        dppf.reset(gtd::find_files(data_dir, ".3bodpp"));
-        if (!dppf) {
-            std::cerr << "Error: could not find any training .3bodpp files in directory \"" << data_dir << "\".\n";
-            return 1;
-        }
-        if (val_dir) {
-            vppf.reset(gtd::find_files(val_dir, ".3bodpp"));
-            if (!vppf) {
-                std::cerr << "Error: could not find any validation .3bodpp files in directory \"" << val_dir << "\".\n";
-                return 1;
-            }
-        }
-    }
-    try {
-        try {
-            NN_BLOCK(long double)
-        } catch (const gtd::invalid_3bod_format&) {
-            try {
-                NN_BLOCK(double)
-            } catch (const gtd::invalid_3bod_format&) {
-                try {
-                    NN_BLOCK(float)
-                } catch (const gtd::invalid_3bod_format &_inv) {
-                    std::cerr << "Error: " << _inv.what() << '\n';
+                    _files = pproc<float>(data_dir, val_dir, norm_str, &nptr_f, false);
+                    d_f = true;
+                } catch (const std::exception &e) {
+                    delete [] *nptr_f;
+                    std::cerr << "Error: " << e.what() << '\n';
                     return 1;
                 }
             }
         }
-    } catch (const std::exception &_e) {
-        std::cerr << "Error: " << _e.what() << '\n';
+    }
+    else if (npp) {
+        _files = gtd::find_files(data_dir, ".3bod");
+        if (!_files) {
+            std::cerr << "Error: could not find any .3bod files in directory \"" << data_dir << "\".\n";
+            return 1;
+        }
+    } else {
+        _files = gtd::find_files(data_dir, ".3bodpp");
+        if (!_files) {
+            std::cerr << "Error: could not find any .3bodpp files in directory \"" << data_dir << "\".\n";
+            return 1;
+        }
+    }
+    /* uint64_t num_passes = parser.get_arg("--num_passes", DEF_NUM_PASSES);
+    if (!num_passes) {
+        std::cerr << "Error: number of passes over entire dataset cannot be zero.\n";
         return 1;
     }
+    std::vector<std::string> files;
+    struct dirent *entry;
+    DIR *dir;
+    if (!(dir = opendir(data_dir))) {
+        std::cerr << "Error: could not open directory \"" << data_dir << "\".\n";
+        return 1;
+    }
+    while ((entry = readdir(dir)))
+        if (gtd::endswith(entry->d_name, ".3bod"))
+            files.emplace_back(entry->d_name);
+    closedir(dir);
+    if (files.empty()) {
+        std::cerr << "Error: no .3bod files found in specified directory \"" << data_dir << "\".\n";
+        return 1;
+    }
+    uint64_t pass = 0;
+    std::mt19937_64 rng{std::random_device{}()};
+    while (pass++ < num_passes) {
+        std::shuffle(files.begin(), files.end(), rng); // shuffle .3bod files so pass over them isn't in the same order
+    } */
+    delete [] _files;
     return 0;
 }
