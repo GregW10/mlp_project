@@ -534,8 +534,11 @@ namespace gtd {
             friend class vel_normaliser;
             template <typename U> requires (std::is_floating_point_v<U>)
             friend class log_vel_normaliser;
+            // template <typename U> requires (std::is_floating_point_v<U>)
+            // friend std::pair<std::string, std::vector<std::string>> preprocess(const char*, normaliser<U>&);
             template <typename U> requires (std::is_floating_point_v<U>)
-            friend std::pair<std::string, std::vector<std::string>> preprocess(const char*, normaliser<U>&);
+            friend void preprocess(const char*, const char*, std::unique_ptr<std::vector<std::string>>&,
+                                   std::unique_ptr<std::vector<std::string>>&, normaliser<U> &_norm, bool);
         };
         template <bool _chk>
         class entry_it<false, _chk> {
@@ -806,7 +809,7 @@ namespace gtd {
         };
         typename f3bodw<T>::header hdr; // might consider removing this, as it involves unnecessary initialisation here
         entry_it<alloc, bnd_chk> _it;
-        uint64_t file_size;
+        // uint64_t file_size;
     public:
         using hdr_t = typename f3bodw<T>::header;
         using iterator_type = entry_it<alloc, bnd_chk>;
@@ -829,7 +832,7 @@ namespace gtd {
             if ((hdr.lds_coll >> 1) != sizeof(long double))
                 throw invalid_3bod_ld_size{"Error: reported size of a \"long double\" does not match "
                                            "\"sizeof(long double)\" on this platform.\n"};
-            if (buff.st_size != (file_size = F3BOD_SIZE(sizeof(T), hdr.N)))
+            if (buff.st_size != F3BOD_SIZE(sizeof(T), hdr.N))
                 throw invalid_3bod_format{"Error: invalid total file size.\n"};
             if constexpr (alloc) {
                 // construct `_it` from reference to `in`, as `_it` will only use it once to read in entire array
@@ -843,6 +846,8 @@ namespace gtd {
                 _it = entry_it<alloc, bnd_chk>{path, hdr.N};
             }
         }
+        f3bodr(const f3bodr<T, alloc, bnd_chk> &other) : _it{other._it}, hdr{other.hdr} {}
+        f3bodr(f3bodr<T, alloc, bnd_chk> &&other) : _it{std::move(other._it)}, hdr{other.hdr} {}
         const hdr_t &header() const noexcept {
             return this->hdr;
         }
@@ -862,6 +867,20 @@ namespace gtd {
         // ~f3bodr() {
         //     std::cout << "f3bodr<T> destructor called." << std::endl;
         // }
+        f3bodr<T> &operator=(const f3bodr<T, alloc, bnd_chk> &other) {
+            if (&other == this)
+                return *this;
+            this->hdr = other.hdr;
+            this->_it = other._it;
+            return *this;
+        }
+        f3bodr<T> &operator=(f3bodr<T, alloc, bnd_chk> &&other) {
+            if (&other == this) // you never know!
+                return *this;
+            this->hdr = other.hdr;
+            this->_it = std::move(other._it);
+            return *this;
+        }
         template <typename U> requires (std::is_floating_point_v<U>)
         friend class normaliser;
         template <typename U> requires (std::is_floating_point_v<U>)
@@ -876,8 +895,11 @@ namespace gtd {
         friend class vel_normaliser;
         template <typename U> requires (std::is_floating_point_v<U>)
         friend class log_vel_normaliser;
+        // template <typename U> requires (std::is_floating_point_v<U>)
+        // friend std::pair<std::string, std::vector<std::string>> preprocess(const char*, normaliser<U>&);
         template <typename U> requires (std::is_floating_point_v<U>)
-        friend std::pair<std::string, std::vector<std::string>> preprocess(const char*, normaliser<U>&);
+        friend void preprocess(const char*, const char*, std::unique_ptr<std::vector<std::string>>&,
+                               std::unique_ptr<std::vector<std::string>>&, normaliser<U> &_norm, bool);
     };
     // Here I define a trivial class used to compare two `std::thread` objects, such that `std::thread` objects can be
     // added to an `std::set`, where the `Compare` type is set to `thread_comparator`:

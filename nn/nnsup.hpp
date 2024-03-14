@@ -467,9 +467,9 @@ namespace gtd {
                 }
                 fpath += "_validation/";
                 uint64_t _vdir_len = strlen_c(vdir);
-                if (*(vdir + _vdir_len - 1) == '/')
+                if (*(vdir + _vdir_len - 1) != '/')
                     ++_vdir_len;
-                uint64_t _new_len = fpath.size();
+                uint64_t _new_len = _prev_len + 12;
                 for (const std::string &vfile : *vfiles) {
                     fpath.append(vfile.begin() + _vdir_len, vfile.end());
                     fpath += "pp";
@@ -518,9 +518,9 @@ namespace gtd {
             }
             fpath += "_validation/";
             uint64_t _vdir_len = strlen_c(vdir);
-            if (*(vdir + _vdir_len - 1) == '/')
+            if (*(vdir + _vdir_len - 1) != '/')
                 ++_vdir_len;
-            uint64_t _new_len = fpath.size();
+            uint64_t _new_len = _prev_len + 12;
             std::vector<std::string> *_new_vfiles = new std::vector<std::string>{};
             _new_vfiles->reserve(vfiles->size());
             for (const std::string &vfile : *vfiles) {

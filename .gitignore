@@ -12,6 +12,7 @@ experiment*/
 *.tsr
 *.mtsr
 *.vtsr
+*.nnw
 shit*
 test.*
 

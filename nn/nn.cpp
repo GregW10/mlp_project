@@ -1,8 +1,8 @@
+#include <algorithm>
 #include "../glib/ml/gregffnn.hpp"
 #include "../glib/misc/gregparse.hpp"
 #include "../glib/misc/gregmisc.hpp"
 #include "nnsup.hpp"
-#include <algorithm>
 
 #define NORM_RGX std::regex{R"(^--norm=(m|l)?t?p?v?$)"} // improve this regex
 #define LAYERS_RGX std::regex{R"(^--layers=\d{1,17}-\d{1,17}:\d{1,8}(,\d{1,17}-\d{1,17}:\d{1,8})*$)"}
@@ -156,7 +156,7 @@ void build_layers(gml::ffnn<W> &_nn, const char *layers) {
     uint64_t idim;
     uint64_t odim;
     uint32_t fid;
-    std::pair<void (*)(T&), void (*)(T&)> funcs;
+    std::pair<void (*)(W&), void (*)(W&)> funcs;
     while (true) {
         idim = to_unsigned<uint64_t>(&layers);
         ++layers; // left pointing to hyphen so move forward by one to next digit
@@ -164,13 +164,29 @@ void build_layers(gml::ffnn<W> &_nn, const char *layers) {
         ++layers; // left pointing to colon so move forward by one to next digit
         fid = to_unsigned<uint32_t>(&layers);
         funcs = gml::activations::get_func_by_id<W>(fid);
-        _nn.emplace_back(idim, odim, funcs.first, funcs.second); // later add in support for different W initialisations
+        // Must add in support later for different initialisations:
+        _nn.emplace_back(idim, odim, funcs.first, funcs.second, gml::GLOROT_UNIFORM);
         if (*layers++ == ',')
             continue;
         else
             break;
     }
 }
+
+// namespace gtd {
+//     template <>
+//     void swap(gtd::f3bodr<long double> &f1, gtd::f3bodr<long double> &f2) {
+//         gml::gen::memswap(&f1, &f2);
+//     }
+//     template <>
+//     void swap(gtd::f3bodr<double> &f1, gtd::f3bodr<double> &f2) {
+//         gml::gen::memswap(&f1, &f2);
+//     }
+//     template <>
+//     void swap(gtd::f3bodr<float> &f1, gtd::f3bodr<float> &f2) {
+//         gml::gen::memswap(&f1, &f2);
+//     }
+// }
 
 template <typename D, typename W>
 void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
@@ -206,9 +222,9 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
     uint64_t idx_lo;
     uint64_t idx_hi;
     uint64_t idx_temp;
-    gml::vector<D> _input{22};
-    gml::vector<D> _y{18};
-    gml::vector<W> *_f;
+    gml::vector<D> _input{(uint64_t) 22};
+    gml::vector<D> _y{(uint64_t) 18};
+    const gml::vector<W> *_f;
     W _tloss; // loss per training example
     W _mloss; // mean loss across batch
     gml::ffnn<W> net;
@@ -228,7 +244,9 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
             bcounter = 0;
             for (const gtd::f3bodr<D> &_rdr : readers) {
                 header = &_rdr.header();
-                dist.param({0, header->N});
+                if (!header->N || header->N == 1) // case for empty or single-entry .3bod/.3bodpp file
+                    continue;
+                dist.param(std::uniform_int_distribution<uint64_t>::param_type{0, header->N - 1});
                 _input[0] = header->masses[0];
                 _input[1] = header->masses[1];
                 _input[2] = header->masses[2];
@@ -252,9 +270,11 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
                     // entry_to_vector(_rdr.entry_at(idx_hi), &_y);
                     gml::gen::copy(_y.begin(), _rdr.entry_at(idx_hi).positions, 18);
                     _tloss = net.backward_pass(_y);
+                    // std::cerr << "T loss: " << _tloss << std::endl;
                     if (++bcounter == batch_size) {
                         _mloss = net.update_params(_lr);
                         bcounter = 0;
+                        std::cout << "Loss: " << _mloss << std::endl;
                     }
                 }
             }
@@ -308,8 +328,8 @@ int main(int argc, char **argv) {
     if (jpp) {
         if (!parser.empty()) {
             std::cerr << "Error: unrecognised arguments:\n";
-            for (const char &*arg : parser)
-                fprintf(stderr, "\t%s\n", arg);
+            for (const auto &[_, arg] : parser)
+                fprintf(stderr, "\t%s\n", arg.c_str());
             fprintf(stderr, "These arguments could be valid for when the NN will be run, but the \"--just_preprocess\" "
                             "means the NN will not be run.\n");
             return 1;
@@ -325,7 +345,8 @@ int main(int argc, char **argv) {
                     std::cerr << "Error: invalid normaliser argument provided (empty).\n"; \
                     return 1; \
                 } \
-                gtd::preprocess(data_dir, val_dir, dppf, vppf, *normaliser, bval);
+                gtd::preprocess(data_dir, val_dir, dppf, vppf, *normaliser, bval); \
+                normaliser.reset(); // free the normaliser after preprocessing as it's no longer needed
                 PP_BLOCK(long double, true)
             } catch (const gtd::invalid_3bod_format&) {
                 try {
@@ -372,6 +393,10 @@ int main(int argc, char **argv) {
         std::cerr << "Error: batch size must be positive.\n";
         return 1;
     }
+    if (batch_size > num_passes*pairs_per_file) {
+        std::cerr << "Error: the batch size cannot be greater than the total number of training examples.\n";
+        return 1;
+    }
     bool allocate_dataset = parser.get_arg("--allocate_dataset", true);
     const char *model_str = parser.get_arg("--from_model");
     const char *layers = parser.get_arg(LAYERS_RGX);
@@ -387,8 +412,8 @@ int main(int argc, char **argv) {
     const char *weights_path = parser.get_arg("--weights_filepath");
     if (!parser.empty()) {
         std::cerr << "Error: unrecognised arguments:\n";
-        for (const char &*arg : parser)
-            fprintf(stderr, "\t%s\n", arg);
+        for (const auto &[_, arg] : parser)
+            fprintf(stderr, "\t%s\n", arg.c_str());
         return 1;
     }
     bool nn_ld = false;
