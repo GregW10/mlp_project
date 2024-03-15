@@ -104,6 +104,7 @@ char *find_normv(void) {
 int process_normv(const char *path) {
     if (!path)
         return 1;
+    printf("File: \"%s\"\n", path);
     struct stat buff = {0};
     if (stat(path, &buff) == -1) {
         fprintf(stderr, "Error: could not obtain file info.\n");

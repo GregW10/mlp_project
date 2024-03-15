@@ -827,11 +827,24 @@ namespace gtd {
             in.read((char *) &hdr, sizeof(hdr_t));
             if (hdr.hd[0] != '3' || (hdr.hd[1] != 'B' && hdr.hd[1] != 'P'))
                 throw invalid_3bod_format{"Error: invalid .3bod/.3bodpp header.\n"};
-            if (hdr.flt_size != sizeof(T))
-                throw invalid_3bod_T_size{"Error: reported size of f.p. data type does not match \"sizeof(T)\".\n"};
-            if ((hdr.lds_coll >> 1) != sizeof(long double))
-                throw invalid_3bod_ld_size{"Error: reported size of a \"long double\" does not match "
-                                           "\"sizeof(long double)\" on this platform.\n"};
+            if ((hdr.lds_coll >> 1) != sizeof(long double)) {
+                /* Have now made this check come first as this would be a definitive termination of a program, whereas
+                 * if `sizeof(T)` does not match, one can at least try a different type `T` again. */
+                std::string error = "Error: reported size of a \"long double\" (";
+                error += std::to_string(hdr.lds_coll >> 1);
+                error += " bytes) does not match \"sizeof(long double)\" (";
+                error += std::to_string(sizeof(long double));
+                error += " bytes) on this platform.\n";
+                throw invalid_3bod_ld_size{error.c_str()};
+            }
+            if (hdr.flt_size != sizeof(T)) {
+                std::string error = "Error: reported size of f.p. data type (";
+                error += std::to_string(hdr.flt_size);
+                error += " bytes) does not match \"sizeof(T)\" (";
+                error += std::to_string(sizeof(T));
+                error += " bytes).\n";
+                throw invalid_3bod_T_size{error.c_str()};
+            }
             if (buff.st_size != F3BOD_SIZE(sizeof(T), hdr.N))
                 throw invalid_3bod_format{"Error: invalid total file size.\n"};
             if constexpr (alloc) {

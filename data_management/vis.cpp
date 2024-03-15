@@ -875,9 +875,10 @@ int main(int argc, char **argv) {
             // perform_action(reader, parser);
             perform_action(*((gtd::f3bodr<long double>*) rdr), *prsr);
         }
-        catch (const gtd::invalid_3bod_ld_size&) {
+        catch (const gtd::invalid_3bod_ld_size &_e) {
             std::cerr << BOLD ERRCOL UDL "Error:" UDLRST ERRTCOL " \"" HDFCOL "sizeof(long double)" ERRTCOL
-            "\" does not match that reported in the .3bod/.3bodpp file.\n";
+            "\" does not match that reported in the .3bod/.3bodpp file.\n" RST;
+            std::cerr << BOLD ERRCOL "what()" "\033[38;5;27m: " ERRTCOL << _e.what() << "\n" RST;
             return 1;
         }
         catch (const gtd::invalid_3bod_T_size&) {
@@ -916,19 +917,21 @@ int main(int argc, char **argv) {
                     }
                     // perform_action(reader, parser);
                     perform_action(*((gtd::f3bodr<float>*) rdr), *prsr);
-                } catch (const gtd::invalid_3bod_T_size&) {
+                } catch (const gtd::invalid_3bod_T_size &_e) {
                     std::cerr << BOLD_TXT(MAGENTA_TXT("Error: "))
                     YELLOW_TXT("reported floating point data type size does not match the size of a ")
                     GREEN_TXT("\"") BLUE_TXT("long double") GREEN_TXT("\"") YELLOW_TXT(", ") GREEN_TXT("\"")
                     BLUE_TXT("double") GREEN_TXT("\"") YELLOW_TXT(" or ") GREEN_TXT("\"") BLUE_TXT("float")
-                    GREEN_TXT("\"") YELLOW_TXT(".\n");
+                    GREEN_TXT("\"") YELLOW_TXT(".\n") RST;
+                    std::cerr << BOLD ERRCOL "what()" "\033[38;5;27m: " ERRTCOL << _e.what() << "\n" RST;
                     return 1;
                 }
             }
         }
     }
-    catch (const gtd::invalid_3bod_format &e) {
-        std::cerr << BOLD ERRCOL UDL "Error:" UDLRST ERRTCOL " invalid .3bod/.3bodpp format.\n";
+    catch (const gtd::invalid_3bod_format &_e) {
+        std::cerr << BOLD ERRCOL UDL "Error:" UDLRST ERRTCOL " invalid .3bod/.3bodpp format.\n" RST;
+        std::cerr << BOLD ERRCOL "what()" "\033[38;5;27m: " ERRTCOL << _e.what() << "\n" RST;
         return 1;
     }
     return 0;

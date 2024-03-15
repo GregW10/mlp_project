@@ -202,19 +202,20 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
     if (!train_files)
         throw std::invalid_argument{"Error: pointer to training files std::vector cannot be nullptr.\n"};
     if (train_files->empty())
-        return;
+        throw std::invalid_argument{"Error: no training files found.\n"};
     typename std::vector<std::string>::size_type num_train_files = train_files->size();
     // if (batch_size > train_size)
     //     throw std::invalid_argument{"Error: batch size cannot be greater than number of examples in training set.\n"};
-    if (batch_size > pairs_per_file*num_train_files)
-        throw std::invalid_argument{"Error: batch size cannot be greater than number of examples in training set.\n"};
+    if (batch_size > pairs_per_file*num_train_files*num_passes)
+        throw std::invalid_argument{"Error: batch size cannot be greater than the total number of training examples "
+                                    "that will be seen.\n"};
     if (!batch_size)
         throw std::invalid_argument{"Error: batch size cannot be zero.\n"};
     if (layer_str && from_model)
         throw std::invalid_argument{"Error: either the model can be built from scratch, or loaded from a .nnw file, "
                                     "but not both!\n"};
     uint64_t tcounter = 0;
-    uint64_t bcounter;
+    uint64_t bcounter = 0;
     uint64_t pcounter;
     std::mt19937_64 rng{std::random_device{}()};
     std::uniform_int_distribution<uint64_t> dist{};
@@ -241,10 +242,10 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
         train_files.reset();
         while (tcounter++ < num_passes) {
             std::shuffle(readers.begin(), readers.end(), rng); // to make sure data is never presented in same order
-            bcounter = 0;
+            // bcounter = 0;
             for (const gtd::f3bodr<D> &_rdr : readers) {
                 header = &_rdr.header();
-                if (!header->N || header->N == 1) // case for empty or single-entry .3bod/.3bodpp file
+                if (header->N <= 1) // case for empty or single-entry .3bod/.3bodpp file
                     continue;
                 dist.param(std::uniform_int_distribution<uint64_t>::param_type{0, header->N - 1});
                 _input[0] = header->masses[0];
@@ -263,11 +264,9 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
                         idx_hi = idx_temp;
                     }
                     // forward and backwards passes
-                    // entry_to_vector(_rdr.entry_at(idx_lo), &_input);
                     gml::gen::copy(_input.begin() + 3, _rdr.entry_at(idx_lo).positions, 18);
                     _input[21] = (idx_hi - idx_lo)*header->dt; // time-step between input and output
                     _f = &net.forward_pass(_input);
-                    // entry_to_vector(_rdr.entry_at(idx_hi), &_y);
                     gml::gen::copy(_y.begin(), _rdr.entry_at(idx_hi).positions, 18);
                     _tloss = net.backward_pass(_y);
                     // std::cerr << "T loss: " << _tloss << std::endl;
@@ -288,6 +287,7 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
     }
     if (bcounter) {
         _mloss = net.update_params(_lr);
+        std::cout << "Loss: " << _mloss << std::endl;
     }
     if (output_nnw)
         net.to_nnw(output_nnw);
@@ -348,6 +348,9 @@ int main(int argc, char **argv) {
                 gtd::preprocess(data_dir, val_dir, dppf, vppf, *normaliser, bval); \
                 normaliser.reset(); // free the normaliser after preprocessing as it's no longer needed
                 PP_BLOCK(long double, true)
+            } catch (const gtd::invalid_3bod_ld_size &_e) {
+                std::cerr << _e.what() << '\n';
+                return 1;
             } catch (const gtd::invalid_3bod_format&) {
                 try {
                     PP_BLOCK(double, true)
@@ -355,13 +358,13 @@ int main(int argc, char **argv) {
                     try {
                         PP_BLOCK(float, true)
                     } catch (const gtd::invalid_3bod_format &_inv) {
-                        std::cerr << "Error: " << _inv.what() << ".\n";
+                        std::cerr << _inv.what() << '\n';
                         return 1;
                     }
                 }
             }
         } catch (const std::exception &_e) {
-            std::cerr << "Error: " << _e.what() << '\n';
+            std::cerr << _e.what() << '\n';
             return 1;
         }
         // delete [] normv_tpath;
@@ -393,10 +396,10 @@ int main(int argc, char **argv) {
         std::cerr << "Error: batch size must be positive.\n";
         return 1;
     }
-    if (batch_size > num_passes*pairs_per_file) {
-        std::cerr << "Error: the batch size cannot be greater than the total number of training examples.\n";
-        return 1;
-    }
+    // if (batch_size > num_passes*pairs_per_file) {
+    //     std::cerr << "Error: the batch size cannot be greater than the total number of training examples.\n";
+    //     return 1;
+    // }
     bool allocate_dataset = parser.get_arg("--allocate_dataset", true);
     const char *model_str = parser.get_arg("--from_model");
     const char *layers = parser.get_arg(LAYERS_RGX);
@@ -409,7 +412,7 @@ int main(int argc, char **argv) {
         if (!layers)
             layers = "--layers=22-128:1,128-64:1,64-18:0";
     }
-    const char *weights_path = parser.get_arg("--weights_filepath");
+    const char *weights_path = parser.get_arg("-o");
     if (!parser.empty()) {
         std::cerr << "Error: unrecognised arguments:\n";
         for (const auto &[_, arg] : parser)
@@ -454,6 +457,9 @@ int main(int argc, char **argv) {
                                                   pairs_per_file, batch_size, learning_rate, weights_path, \
                                                   allocate_dataset);
                 NN_BLOCK(long double)
+            } catch (const gtd::invalid_3bod_ld_size &_e) {
+                std::cerr << _e.what() << '\n';
+                return 1;
             } catch (const gtd::invalid_3bod_format&) {
                 try {
                     PP_BLOCK(double, false)
@@ -463,38 +469,38 @@ int main(int argc, char **argv) {
                         PP_BLOCK(float, false)
                         NN_BLOCK(float)
                     } catch (const gtd::invalid_3bod_format &_inv) {
-                        std::cerr << "Error: " << _inv.what() << '\n';
+                        std::cerr << _inv.what() << '\n';
                         return 1;
                     }
                 }
             }
         } catch (const std::exception &_e) {
-            std::cerr << "Error: " << _e.what() << '\n';
+            std::cerr << _e.what() << '\n';
             return 1;
         }
         return 0;
     }
-    else if (npp) {
-        dppf.reset(gtd::find_files(data_dir, ".3bod"));
+    if (npp) {
+        dppf.reset(gtd::find_files(data_dir, ".3bod", true));
         if (!dppf) {
             std::cerr << "Error: could not find any training .3bod files in directory \"" << data_dir << "\".\n";
             return 1;
         }
         if (val_dir) {
-            vppf.reset(gtd::find_files(val_dir, ".3bod"));
+            vppf.reset(gtd::find_files(val_dir, ".3bod", true));
             if (!vppf) {
                 std::cerr << "Error: could not find any validation .3bod files in directory \"" << val_dir << "\".\n";
                 return 1;
             }
         }
     } else {
-        dppf.reset(gtd::find_files(data_dir, ".3bodpp"));
+        dppf.reset(gtd::find_files(data_dir, ".3bodpp", true));
         if (!dppf) {
             std::cerr << "Error: could not find any training .3bodpp files in directory \"" << data_dir << "\".\n";
             return 1;
         }
         if (val_dir) {
-            vppf.reset(gtd::find_files(val_dir, ".3bodpp"));
+            vppf.reset(gtd::find_files(val_dir, ".3bodpp", true));
             if (!vppf) {
                 std::cerr << "Error: could not find any validation .3bodpp files in directory \"" << val_dir << "\".\n";
                 return 1;

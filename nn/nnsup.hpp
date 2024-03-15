@@ -353,16 +353,6 @@ namespace gtd {
          * file in a newly created directory. */
         if (!dpath)
             throw std::invalid_argument{"Error: path to training data directory cannot be nullptr.\n"};
-        // if (!jpp) {
-        //     if (!dppf)
-        //         throw std::invalid_argument{"Error: pointer to pointer to std::vector<std::string> for holding "
-        //                                     "preprocessed training data file paths cannot be nullptr unless data is "
-        //                                     "only being preprocessed.\n"};
-        //     if (vdir && !vppf)
-        //         throw std::invalid_argument{"Error: pointer to pointer to std::vector<std::string> for holding "
-        //                                     "preprocessed validation data file paths cannot be nullptr if vdir is not "
-        //                                     "nullptr, unless data is only being preprocessed.\n"};
-        // }
         DIR *dir;
         struct dirent *entry;
         std::string fpath;
@@ -424,7 +414,6 @@ namespace gtd {
                     }
                     ++_it;
                 }
-                // files.emplace_back(entry->d_name);
                 files.push_back(fpath); // I prefer the slightly increased memory use in storing the dir. name prepended
                 fpath.erase(dpath_len); // before each filename, rather than having to re-prepend it later
             }
@@ -455,59 +444,6 @@ namespace gtd {
         _norm.max_time(max_sim_time);
         _norm.max_pos(max_abs_pcomp);
         _norm.max_vel(max_abs_vcomp);
-        uint64_t _prev_len = fpath.size();
-        if (jpp) { // case for just preprocessing - so no need to return preprocessed filenames
-            if (vdir) {
-                std::vector<std::string> *vfiles = find_files(vdir, ".3bod", true);
-                if (!vfiles) {
-                    fpath = "Error: no .3bod files found in validation data directory \"";
-                    fpath += vdir;
-                    fpath += "\".\n";
-                    throw std::logic_error{fpath};
-                }
-                fpath += "_validation/";
-                uint64_t _vdir_len = strlen_c(vdir);
-                if (*(vdir + _vdir_len - 1) != '/')
-                    ++_vdir_len;
-                uint64_t _new_len = _prev_len + 12;
-                for (const std::string &vfile : *vfiles) {
-                    fpath.append(vfile.begin() + _vdir_len, vfile.end());
-                    fpath += "pp";
-                    _norm(vfile, fpath);
-                    fpath.erase(_new_len);
-                }
-                delete [] vfiles;
-                std::cout << "Preprocessed validation data files written to \"" << fpath << "\".\n";
-                fpath += "norm_vals_for_valset_";
-                fpath += date_and_time;
-                _norm.write_normv((fpath += ".normv").c_str());
-                std::cout << "Normalisation values within validation set written to \"" << fpath << "\".\n";
-                // if (normv_path_v)
-                //     *normv_path_v = strcpy_c(new char[fpath.size() + 1], fpath.c_str());
-                fpath.erase(_prev_len);
-            }
-            fpath.push_back('/');
-            uint64_t _new_dpath_len = _prev_len + 1; /* dpath_len + 14 + 25 + 2; */
-            for (const std::string &_old_path : files) {
-                fpath.append(_old_path.begin() + dpath_len, _old_path.end());
-                fpath += "pp"; // to make the extension .3bodpp ("pp" for "preprocessed")
-                _norm(_old_path, fpath);
-                fpath.erase(_new_dpath_len);
-            }
-            std::cout << "Preprocessed training data files written to \"" << fpath << "\".\n";
-            // Write max. values to binary data file
-            fpath += "norm_vals_";
-            fpath += date_and_time;
-            _norm.write_normv((fpath += ".normv").c_str());
-            std::cout << "Normalisation values within training set written to \"" << fpath << "\".\n";
-            // if (normv_path_d)
-            //     *normv_path_d = strcpy_c(new char[fpath.size() + 1], fpath.c_str());
-            // *dppf = nullptr;
-            // if (vppf)
-            //     *vppf = nullptr;
-            // return {fpath, nullptr}; // nullptr for `std::vector` as the names of the preprocessed files are not needed
-            return;
-        }
         if (vdir) {
             std::vector<std::string> *vfiles = find_files(vdir, ".3bod", true);
             if (!vfiles) {
@@ -516,34 +452,64 @@ namespace gtd {
                 fpath += "\".\n";
                 throw std::logic_error{fpath};
             }
-            fpath += "_validation/";
+            std::string vpath = vdir;
+            if (vpath.back() == '/')
+                vpath.pop_back();
+            vpath += "_preprocessed_";
+            vpath += date_and_time;
+            if (mkdir(vpath.c_str(), S_IRWXU | S_IRWXG | S_IRWXO) == -1) {
+                fpath = "Error: could not create \"";
+                fpath += vpath;
+                fpath += "\" directory.\n";
+                throw std::ios_base::failure{fpath};
+            }
+            vpath.push_back('/');
+            uint64_t ppvaldir_len = vpath.size();
             uint64_t _vdir_len = strlen_c(vdir);
             if (*(vdir + _vdir_len - 1) != '/')
                 ++_vdir_len;
-            uint64_t _new_len = _prev_len + 12;
-            std::vector<std::string> *_new_vfiles = new std::vector<std::string>{};
-            _new_vfiles->reserve(vfiles->size());
-            for (const std::string &vfile : *vfiles) {
-                fpath.append(vfile.begin() + _vdir_len, vfile.end());
-                fpath += "pp";
-                _norm(vfile, fpath);
-                _new_vfiles->push_back(fpath);
-                fpath.erase(_new_len);
+            if (jpp) { // case for just preprocessing - so no need to return preprocessed filenames
+                for (const std::string &vfile : *vfiles) {
+                    vpath.append(vfile.begin() + _vdir_len, vfile.end());
+                    vpath += "pp";
+                    _norm(vfile, vpath);
+                    vpath.erase(ppvaldir_len);
+                }
+            } else {
+                std::vector<std::string> *_new_vfiles = new std::vector<std::string>{};
+                _new_vfiles->reserve(vfiles->size());
+                for (const std::string &vfile : *vfiles) {
+                    vpath.append(vfile.begin() + _vdir_len, vfile.end());
+                    vpath += "pp";
+                    _norm(vfile, vpath);
+                    _new_vfiles->push_back(vpath);
+                    vpath.erase(ppvaldir_len);
+                }
+                vppf.reset(_new_vfiles);
             }
-            delete [] vfiles;
-            std::cout << "Preprocessed validation data files written to \"" << fpath << "\".\n";
-            fpath += "norm_vals_for_valset_";
-            fpath += date_and_time;
-            _norm.write_normv((fpath += ".normv").c_str());
-            std::cout << "Normalisation values within validation set written to \"" << fpath << "\".\n";
-            // if (normv_path_v)
-            //     *normv_path_v = strcpy_c(new char[fpath.size() + 1], fpath.c_str());
-            fpath.erase(_prev_len);
-            // *vppf = _new_vfiles;
-            vppf.reset(_new_vfiles);
+            delete vfiles;
+            std::cout << "Preprocessed validation data files written to \"" << vpath << "\".\n";
+            vpath += "norm_vals_for_valset_";
+            vpath += date_and_time;
+            _norm.write_normv((vpath += ".normv").c_str());
+            std::cout << "Normalisation values within validation set written to \"" << vpath << "\".\n";
         }
         fpath.push_back('/');
-        uint64_t _new_dpath_len = fpath.size(); /* dpath_len + 14 + 25 + 2; */
+        uint64_t _prev_len = fpath.size();
+        if (jpp) {
+            for (const std::string &_old_path : files) {
+                fpath.append(_old_path.begin() + dpath_len, _old_path.end());
+                fpath += "pp"; // to make the extension .3bodpp ("pp" for "preprocessed")
+                _norm(_old_path, fpath);
+                fpath.erase(_prev_len);
+            }
+            std::cout << "Preprocessed training data files written to \"" << fpath << "\".\n";
+            fpath += "norm_vals_";
+            fpath += date_and_time;
+            _norm.write_normv((fpath += ".normv").c_str());// write max. values to binary data file
+            std::cout << "Normalisation values within training set written to \"" << fpath << "\".\n";
+            return;
+        }
         std::vector<std::string> *_new_files = new std::vector<std::string>{};
         _new_files->reserve(files.size());
         for (const std::string &_old_path : files) {
@@ -551,18 +517,14 @@ namespace gtd {
             fpath += "pp";
             _norm(_old_path, fpath);
             _new_files->push_back(fpath);
-            fpath.erase(_new_dpath_len);
+            fpath.erase(_prev_len);
         }
         std::cout << "Preprocessed training data files written to \"" << fpath << "\".\n";
         fpath += "norm_vals_";
         fpath += date_and_time;
         _norm.write_normv((fpath += ".normv").c_str());
         std::cout << "Normalisation values within training set written to \"" << fpath << "\".\n";
-        // if (normv_path_d)
-        //     *normv_path_d = strcpy_c(new char[fpath.size() + 1], fpath.c_str());
-        // *dppf = _new_files;
         dppf.reset(_new_files);
-        // return {fpath, _new_files};
     }
 }
 #endif
