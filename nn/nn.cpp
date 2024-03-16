@@ -3,6 +3,8 @@
 #include "../glib/misc/gregparse.hpp"
 #include "../glib/misc/gregmisc.hpp"
 #include "nnsup.hpp"
+#include <csignal>
+#include <atomic>
 
 #define NORM_RGX std::regex{R"(^--norm=(m|l)?t?p?v?$)"} // improve this regex
 #define LAYERS_RGX std::regex{R"(^--layers=\d{1,17}-\d{1,17}:\d{1,8}(,\d{1,17}-\d{1,17}:\d{1,8})*$)"}
@@ -10,6 +12,14 @@
 #define DEF_NUM_PASSES ((uint64_t) 1'000)
 #define DEF_LR (1/powl(2, 10))
 #define DEF_PPF ((uint64_t) 1'000)
+
+// std::atomic<bool> received_signal{false};
+std::atomic<int> signal_number{};
+
+void signal_handler(int signal) {
+    // received_signal.store(true);
+    signal_number.store(signal);
+}
 
 template <typename T> requires (std::is_floating_point_v<T>)
 gtd::normaliser<T> *get_normaliser(const char *norm_arg) {
@@ -214,6 +224,8 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
     if (layer_str && from_model)
         throw std::invalid_argument{"Error: either the model can be built from scratch, or loaded from a .nnw file, "
                                     "but not both!\n"};
+    std::chrono::time_point<std::chrono::system_clock> _start;
+    std::chrono::time_point<std::chrono::system_clock> _end;
     uint64_t tcounter = 0;
     uint64_t bcounter = 0;
     uint64_t pcounter;
@@ -240,6 +252,7 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
             readers.emplace_back(_str.c_str()); // exception will occur here in case of T mismatch
         // delete [] train_files;
         train_files.reset();
+        _start = std::chrono::system_clock::now();
         while (tcounter++ < num_passes) {
             std::shuffle(readers.begin(), readers.end(), rng); // to make sure data is never presented in same order
             // bcounter = 0;
@@ -275,6 +288,24 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
                         bcounter = 0;
                         std::cout << "Loss: " << _mloss << std::endl;
                     }
+                    if (signal_number.load()) {
+                        std::cout << "Received signal ";
+                        switch (signal_number.load()) {
+                            case SIGINT:
+                                std::cout << "SIGINT";
+                                break;
+                            case SIGTERM:
+                                std::cout << "SIGTERM";
+                                break;
+                            case SIGHUP:
+                                std::cout << "SIGHUP";
+                                break;
+                            case SIGQUIT:
+                                std::cout << "SIGQUIT";
+                        }
+                        std::cout << ".\nStopping training and saving weights...\n";
+                        goto _out;
+                    }
                 }
             }
         }
@@ -289,14 +320,51 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
         _mloss = net.update_params(_lr);
         std::cout << "Loss: " << _mloss << std::endl;
     }
-    if (output_nnw)
-        net.to_nnw(output_nnw);
-    else
-        net.to_nnw();
+    _out:
+    _end = std::chrono::system_clock::now();
+    try {
+        if (output_nnw)
+            std::cout << "Neural Network weights written to \"" << net.to_nnw(output_nnw) << "\"." << std::endl;
+        else {
+            char *_ptr;
+            std::cout << "Neural Network weights written to \"" << (_ptr = net.to_nnw()) << "\"." << std::endl;
+            /* Does not result in unfreed memory in case of an exception, as I have used `std::unique_ptr within my
+             * `.to_nnw()` function, such that its destructor would be called during stack unwinding, as the exception
+             * would be caught below. If no exception occurs, the `std::unique_ptr` releases the pointer. */
+            delete [] _ptr;
+        }
+    } catch (const std::exception &_e) {
+        std::cerr << "Error: weights were not written due to an exception occurring.\nwhat(): " << _e.what() << '\n';
+    }
+    std::cout << "Total training time took "
+              << std::chrono::duration_cast<std::chrono::nanoseconds>(_end - _start).count()/BILLION << " seconds."
+              << std::endl;
 }
 
 int main(int argc, char **argv) {
+    if (signal(SIGINT, signal_handler) == SIG_ERR) {
+        std::cerr << "Error: could not register signal_handler() with signal() for SIGINT.\n";
+        return 1;
+    }
+    if (signal(SIGTERM, signal_handler) == SIG_ERR) {
+        std::cerr << "Error: could not register signal_handler() with signal() for SIGTERM.\n";
+        return 1;
+    }
+    if (signal(SIGHUP, signal_handler) == SIG_ERR) {
+        std::cerr << "Error: could not register signal_handler() with signal() for SIGHUP.\n";
+        return 1;
+    }
+    if (signal(SIGQUIT, signal_handler) == SIG_ERR) {
+        std::cerr << "Error: could not register signal_handler() with signal() for SIGQUIT.\n";
+        return 1;
+    }
     gtd::parser parser{argc, argv};
+    bool _print = parser.get_arg("--print", false);
+    if (_print) {
+        printf("Experiment started with arguments:\n");
+        for (const auto &[_, arg] : parser)
+            printf("\t%s\n", arg.c_str());
+    }
     const char *data_dir = parser.get_arg("--data_dir");
     if (!data_dir)
         data_dir = ".";
