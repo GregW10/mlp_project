@@ -106,17 +106,17 @@ T operator*(const vector<T> &v1, const vector<T> &v2) { // dot product
 
 template <typename T, typename U> requires (std::is_floating_point_v<T> && std::is_floating_point_v<U>)
 vector<T> operator*(U scalar, const vector<T> &vec) {
-    return {scalar*vec.x, scalar*vec.y, scalar*vec.z};
+    return {static_cast<T>(scalar*vec.x), static_cast<T>(scalar*vec.y), static_cast<T>(scalar*vec.z)};
 }
 
 template <typename T, typename U> requires (std::is_floating_point_v<T> && std::is_floating_point_v<U>)
 vector<T> operator*(const vector<T> &vec, U scalar) {
-    return {scalar*vec.x, scalar*vec.y, scalar*vec.z};
+    return {static_cast<T>(scalar*vec.x), static_cast<T>(scalar*vec.y), static_cast<T>(scalar*vec.z)};
 }
 
 template <typename T, typename U> requires (std::is_floating_point_v<T> && std::is_floating_point_v<U>)
 vector<T> operator/(const vector<T> &vec, U scalar) {
-    return {vec.x/scalar, vec.y/scalar, vec.z/scalar};
+    return {static_cast<T>(vec.x/scalar), static_cast<T>(vec.y/scalar), static_cast<T>(vec.z/scalar)};
 }
 
 template <typename T> requires (std::is_floating_point_v<T>)

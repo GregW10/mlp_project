@@ -340,8 +340,8 @@ namespace gtd {
         gen_normaliser() = default;
     };
     template <typename T> requires (std::is_floating_point_v<T>)
-    void preprocess(const char *dpath, // path to training data directory
-                    const char *vdir, // path to validation data directory (can be `nullptr`)
+    void preprocess(const char *traindir, // path to training data directory
+                    const char *valdir, // path to validation data directory (can be `nullptr`)
                     // char **normv_path_d, // made to point to preprocessed training data directory .normv file
                     // char **normv_path_v, // made to point to preprocessed validation data directory .normv file
                     std::unique_ptr<std::vector<std::string>> &dppf, // preprocessed training data file paths
@@ -351,8 +351,38 @@ namespace gtd {
         /* Preprocesses the entire dataset. Goes through all .3bod files in given directory, finds max. values, uses
          * these to normalise the data in each .3bod file, placing the normalised data into each corresponding .3bodpp
          * file in a newly created directory. */
-        if (!dpath)
+        if (!traindir)
             throw std::invalid_argument{"Error: path to training data directory cannot be nullptr.\n"};
+        static char full_dpath[PATH_MAX];
+        static char full_vpath[PATH_MAX];
+        const char *dpath{};
+        const char *vdir{};
+        if (!jpp) {
+            if (!realpath(traindir, full_dpath)) {
+                std::string error = "Error: realpath() failure.\nCould not obtain full expanded path for \"";
+                error += traindir;
+                error += "\".\nReason: ";
+                error += strerror(errno);
+                error.push_back('\n');
+                throw std::ios_base::failure{error};
+            }
+            dpath = full_dpath;
+            if (valdir) {
+                if (!realpath(valdir, full_vpath)) {
+                    std::string error = "Error: realpath() failure.\nCould not obtain full expanded path for \"";
+                    error += valdir;
+                    error += "\".\nReason: ";
+                    error += strerror(errno);
+                    error.push_back('\n');
+                    throw std::ios_base::failure{error};
+                }
+                vdir = full_vpath;
+            }
+        } else {
+            dpath = traindir;
+            if (valdir)
+                vdir = valdir;
+        }
         DIR *dir;
         struct dirent *entry;
         std::string fpath;

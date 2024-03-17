@@ -328,7 +328,7 @@ namespace gtd {
                 return {tot, _arr, _arr, 0, true};
             }
             entry_it end_it() const noexcept {
-                return {tot, _arr, _arr + tot, tot, true};
+                return {tot, _arr, _arr + tot, static_cast<int64_t>(tot), true};
             }
             entry_it(std::ifstream &_in, uint64_t tot_num) : tot{tot_num}, cpy{false} {
                 /* This constructs the "original" `entry_it<true>` object and, thus, is the only one in which `cpy` is
