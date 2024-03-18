@@ -10,9 +10,17 @@
 #endif
 
 #define VIEW_HEADER R"(^h$)"
+#ifdef __APPLE__
+/* Have been forced to include this conditional compilation given a nasty bug in Apple's LLVM Clang compiler to do with
+ * back-references in regex. Thus, these versions don't support changing the order of the "pvace" options. */
+#define VIEW_ALL R"(^v-p?v?a?c?e?$)" // this regex took me AGES to craft!! ... simple as it looks :(
+#define VIEW_RANGE R"(^v-p?v?a?c?e?:\d{1,18}-\d{1,18}$)"
+#define VIEW_ENTRY R"(^v-p?v?a?c?e?:\d{1,18}$)"
+#else
 #define VIEW_ALL R"(^v-(?:([pvace])(?!.*\1)){0,5}$)" // this regex took me AGES to craft!! ... simple as it looks :(
 #define VIEW_RANGE R"(^v-(?:([pvace])(?!.*\1)){0,5}:\d{1,18}-\d{1,18}$)"
 #define VIEW_ENTRY R"(^v-(?:([pvace])(?!.*\1)){0,5}:\d{1,18}$)"
+#endif
 #define ANALYSIS R"(^a$)"
 #define ANALYSIS_RANGE R"(^a:\d{1,18}-\d{1,18}$)"
 

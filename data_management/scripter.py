@@ -12,6 +12,10 @@ masses = {1.0: 1.65*(60/16.0), 100.0: 165.0*(60/16.0), 10_000.0: 16_500.0*(60/16
           1_000_000.0: 1_650_000.0*(60/16.0),
           100_000_000.0: 165_000_000.0*(60/16.0)}
 
+# masses = {1.0: 1.65, 100.0: 165.0, 10_000.0: 16_500.0,
+#           1_000_000.0: 1_650_000.0,
+#           100_000_000.0: 165_000_000.0}
+
 denom = 2**6
 
 vel_scale_step = 1/denom
@@ -32,6 +36,7 @@ timestep_exp = 0.25
 # box_length = 2 # use default
 # box_height = 2 # use default
 # softening = 1/2**26 # use default
+min_sep = 0.125
 early_stopping = True
 verbose = True
 output_nsys = False
@@ -67,6 +72,7 @@ def main():
                     f"--starting_mass {starting_mass} --mass_step {mass_step} --mass_sd_scaling {mass_sd_scaling} "
                     f"--timestep_scaling {timestep_scaling} --timestep_exp {timestep_exp} "
                     f"--velocity_scaling {velocity_scaling} {'--softening 0 ' if not soft else ''}"
+                    f"--min_sep {min_sep} "
                     f"-o vel_scale_{velocity_scaling}_sm_{starting_mass}_ms_{mass_step} > "
                     f"log_vel_scale_{velocity_scaling}_sm_{starting_mass}_ms_{mass_step} 2> "
                     f"errors_vel_scale_{velocity_scaling}_sm_{starting_mass}_ms_{mass_step}\n\n")

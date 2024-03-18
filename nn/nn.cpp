@@ -13,6 +13,7 @@
 #define DEF_LR (1/powl(2, 10))
 #define DEF_PPF ((uint64_t) 1'000)
 #define DEF_REC_FREQ ((uint64_t) 1)
+#define DEF_LOSS_PREC 10
 
 // std::atomic<bool> received_signal{false};
 std::atomic<int> signal_number{};
@@ -22,7 +23,10 @@ void signal_handler(int signal) {
     signal_number.store(signal);
 }
 
-uint64_t lossrf;
+uint64_t tlossrf;
+uint64_t vlossrf;
+
+std::streamsize loss_prec{};
 
 std::ofstream logger{}; // global so I don't have to worry about passing it to functions
 
@@ -177,7 +181,7 @@ void build_layers(gml::ffnn<W> &_nn, const char *layers) {
         odim = to_unsigned<uint64_t>(&layers);
         ++layers; // left pointing to colon so move forward by one to next digit
         fid = to_unsigned<uint32_t>(&layers);
-        funcs = gml::activations::get_func_by_id<W>(fid);
+        funcs = gml::activations::get_funcs_by_id<W>(fid);
         // Must add in support later for different initialisations:
         _nn.emplace_back(idim, odim, funcs.first, funcs.second, gml::GLOROT_UNIFORM);
         if (*layers++ == ',')
@@ -201,6 +205,23 @@ void build_layers(gml::ffnn<W> &_nn, const char *layers) {
 //         gml::gen::memswap(&f1, &f2);
 //     }
 // }
+
+std::ostream &format_seconds(std::ostream &os, long double seconds) {
+    uint64_t whole = (uint64_t) seconds;
+    seconds -= (long double) whole;
+    uint64_t days = whole/86'400;
+    // whole -= days*86'400;
+    whole %= 86'400;
+    uint64_t hours = whole/3'600;
+    // whole -= hours*3'600;
+    whole %= 3'600;
+    uint64_t mins = whole/60;
+    // whole -= mins*60;
+    whole %= 60;
+    seconds += (long double) whole;
+    return os << days << " day" << &("s, "[days == 1]) << hours << " hour" << &("s, "[hours == 1]) << mins << " minute"
+              << &("s, and "[mins == 1]) << seconds << " second" << "s"[seconds == 1];
+}
 
 template <typename D, typename W>
 void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
@@ -229,9 +250,10 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
     if (layer_str && from_model)
         throw std::invalid_argument{"Error: either the model can be built from scratch, or loaded from a .nnw file, "
                                     "but not both!\n"};
-    if (lossrf > tot_examples/batch_size) // check this
-        throw std::logic_error{"Error: the loss recording frequency cannot be greater than the total number of weight "
-                               "updates foreseen to occur.\n"};
+    uint64_t tot_updates = tot_examples/batch_size;
+    if (tlossrf > tot_updates || vlossrf > tot_updates) // check this
+        throw std::logic_error{"Error: neither loss recording frequency cannot be greater than the total number of "
+                               "weight updates foreseen to occur.\n"};
     std::chrono::time_point<std::chrono::system_clock> _start;
     std::chrono::time_point<std::chrono::system_clock> _end;
     uint64_t tcounter = 0;
@@ -270,11 +292,12 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
         logger << "\"float\"\n";
     logger << "Size of data f.p. type = " << sizeof(D) << " bytes\n";
     char *_ltime{};
-    uint64_t rf_counter = 0;
+    uint64_t trf_counter = 0;
     std::ofstream tlosses{"train_losses.csv", std::ios_base::out | std::ios_base::trunc};
     if (!tlosses.good())
         throw std::ios_base::failure{"Error: could not open \"train_losses.csv\" file.\n"};
-    tlosses << "epoch,file_idx,loss\r\n";
+    tlosses << "epoch,file,pair,loss\r\n";
+    tlosses.precision(loss_prec);
     // make separate branch for val if `val_files` and only there open file
     if (alloc) {
         std::vector<gtd::f3bodr<D>> readers{};
@@ -293,6 +316,7 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
             // bcounter = 0;
             fcounter = 0;
             for (const gtd::f3bodr<D> &_rdr : readers) {
+                ++fcounter;
                 header = &_rdr.header();
                 if (header->N <= 1) // case for empty or single-entry .3bod/.3bodpp file
                     continue;
@@ -319,13 +343,13 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
                     gml::gen::copy(_y.begin(), _rdr.entry_at(idx_hi).positions, 18);
                     _tloss = net.backward_pass(_y);
                     // std::cerr << "T loss: " << _tloss << std::endl;
-                    ++fcounter;
                     if (++bcounter == batch_size) {
                         _mloss = net.update_params(_lr);
                         bcounter = 0;
                         std::cout << "Loss: " << _mloss << std::endl;
-                        if (++rf_counter == lossrf) {
-                            tlosses << tcounter << ',' << fcounter << ',' << _mloss << "\r\n";
+                        if (++trf_counter == tlossrf) {
+                            tlosses << tcounter << ',' << fcounter << ',' << pcounter << ',' << _mloss << "\r\n";
+                            trf_counter = 0;
                         }
                     }
                     if (signal_number.load()) {
@@ -366,7 +390,7 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
     logger << "Training end time: " << _ltime << '\n';
     delete [] _ltime;
     tlosses.close();
-    logger << "Actual num. passes over training set = " << tcounter << '\n';
+    logger << "Actual num. passes over training set = " << (signal_number.load() ? tcounter - 1 : tcounter) << '\n';
     try {
         if (output_nnw) {
             std::cout << "Neural Network weights written to \"" << net.to_nnw(output_nnw) << "\"." << std::endl;
@@ -384,9 +408,12 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
     } catch (const std::exception &_e) {
         std::cerr << "Error: weights were not written due to an exception occurring.\nwhat(): " << _e.what() << '\n';
     }
-    std::cout << "Total training time took "
-              << std::chrono::duration_cast<std::chrono::nanoseconds>(_end - _start).count()/BILLION << " seconds."
+    long double seconds;
+    std::cout << "Total training time took ";
+    format_seconds(std::cout,
+                   (seconds = std::chrono::duration_cast<std::chrono::nanoseconds>(_end - _start).count()/BILLION))
               << std::endl;
+    logger << "Total training time = " << seconds << " seconds\n";
     logger.close();
 }
 
@@ -407,7 +434,7 @@ int main(int argc, char **argv) {
         std::cerr << "Error: could not register signal_handler() with signal() for SIGQUIT.\n";
         return 1;
     }
-    printf("PID: %d\n----------------\n", getpid());
+    printf("PID: %" PRIu64 "\n----------------\n", (uint64_t) getpid());
     gtd::parser parser{argc, argv};
     bool _print = parser.get_arg("--print", false);
     if (_print) {
@@ -493,6 +520,11 @@ int main(int argc, char **argv) {
         // delete [] normv_vpath;
         return 0;
     } // after this block it is certain the NN will be run
+    loss_prec = parser.get_arg("--loss_precision", DEF_LOSS_PREC);
+    if (!loss_prec) {
+        std::cerr << "Error: loss precision cannot be zero.\n";
+        return 1;
+    }
     const char *ftype = parser.get_arg("--fp_type"); // floating point type of weights and biases in NN
     bool nn_ld = false;
     bool nn_d = false;
@@ -545,18 +577,19 @@ int main(int argc, char **argv) {
     const char *layers = parser.get_arg(LAYERS_RGX);
     const char *weights_path = parser.get_arg("-n");
     const char *edir = parser.get_arg("-o");
-    lossrf = parser.get_arg("--loss_rec_freq", DEF_REC_FREQ);
+    tlossrf = parser.get_arg("--tloss_rec_freq", DEF_REC_FREQ);
+    vlossrf = parser.get_arg("--vloss_rec_freq", DEF_REC_FREQ);
     if (!parser.empty()) {
         std::cerr << "Error: unrecognised arguments:\n";
         for (const auto &[_, arg] : parser)
             fprintf(stderr, "\t%s\n", arg.c_str());
         return 1;
     }
-    if (!lossrf) {
-        std::cerr << "Error: loss rec. freq. cannot be zero.\n";
+    if (!tlossrf || !vlossrf) {
+        std::cerr << "Error: training and validation loss rec. freq. cannot be zero.\n";
         return 1;
     }
-    char from_model[PATH_MAX];
+    static char from_model[PATH_MAX]; // static to avoid wasting stack space
     if (model_str) {
         if (layers) {
             std::cerr << "Error: both the model from which to load and the layout of the NN cannot be specified.\n";
@@ -569,9 +602,9 @@ int main(int argc, char **argv) {
         model_str = from_model;
     } else {
         if (!layers)
-            layers = "--layers=22-128:1,128-64:1,64-18:0";
+            layers = "--layers=22-64:1,64-64:1,64-64:1,64-64:1,64-64:1,64-48:1,48-18:0";
     }
-    char cwd[PATH_MAX]; // for log file, in case `data_dir` is "."
+    static char cwd[PATH_MAX]; // for log file, in case `data_dir` is "."
     if (*data_dir == '.' && !*(data_dir + 1)) {
         if (!getcwd(cwd, PATH_MAX)) {
             std::cerr << "Error: could not obtain current working directory.\nReason: " << strerror(errno) << '\n';
@@ -593,26 +626,26 @@ int main(int argc, char **argv) {
         std::cerr << "Error: could not change directory to experiment directory \"" << edir << "\".\n"; \
         return 1; \
     } \
-    std::cout << "Created and changed directory to experiment directory \"" << edir << "\".\n";
-    char *exp_info = new char[gtd::strlen_c(edir) + 5];
-    gtd::strcpy_c(exp_info, edir);
-    gtd::strcat_c(exp_info, ".txt");
-    logger.open(exp_info, std::ios_base::out | std::ios_base::trunc);
-    if (!logger.good()) {
-        std::cerr << "Error: could not open log file \"" << exp_info << "\".\n";
-        delete [] exp_info;
-        return 1;
-    }
-    delete [] exp_info;
-    logger << "Experiment name: \"" << edir << "\"\nTraining data directory: \"" << data_dir
-           << "\"\nValidation data directory: \"" << (val_dir ? val_dir : "(None)") << "\nNormalisation type: "
-           << (norm_str ? norm_str + 7 : "N/A") << "\nLearning rate = " << learning_rate
-           << "\nRequested num. passes over training set = " << num_passes
-           << "\nNumber of pairs to generate per file = " << pairs_per_file << "\nBatch size = " << batch_size
-           << "\nAllocate dataset: " << std::boolalpha << allocate_dataset;
-    if (model_str)
-        logger << "\nModel pre-loaded from: \"" << model_str << "\"\n";
-    else
+    std::cout << "Created and changed directory to experiment directory \"" << edir << "\".\n"; \
+    char *exp_info = new char[gtd::strlen_c(edir) + 5]; \
+    gtd::strcpy_c(exp_info, edir); \
+    gtd::strcat_c(exp_info, ".txt"); \
+    logger.open(exp_info, std::ios_base::out | std::ios_base::trunc); \
+    if (!logger.good()) { \
+        std::cerr << "Error: could not open log file \"" << exp_info << "\".\n"; \
+        delete [] exp_info; \
+        return 1; \
+    } \
+    delete [] exp_info; \
+    logger << "Experiment name: \"" << edir << "\"\nTraining data directory: \"" << data_dir \
+           << "\"\nValidation data directory: \"" << (val_dir ? val_dir : "(None)") << "\nNormalisation type: " \
+           << (norm_str ? norm_str + 7 : "N/A") << "\nLearning rate = " << learning_rate \
+           << "\nRequested num. passes over training set = " << num_passes \
+           << "\nNumber of pairs to generate per file = " << pairs_per_file << "\nBatch size = " << batch_size \
+           << "\nAllocate dataset: " << std::boolalpha << allocate_dataset; \
+    if (model_str) \
+        logger << "\nModel pre-loaded from: \"" << model_str << "\"\n"; \
+    else \
         logger << "\nModel layers: " << (layers + 9) << '\n';
     /* if (weights_path)
         logger << "Weights output path: \"" << weights_path << "\"\n";
