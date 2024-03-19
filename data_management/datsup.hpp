@@ -11,6 +11,7 @@
 
 #include "../glib/nbod/gregsys.hpp"
 #include "../glib/misc/gregparse.hpp"
+#include "../glib/ml/greggen.hpp"
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -19,6 +20,19 @@
 #define EJ_FACTOR 8.0l // minimum ratio of largest distance between bodies to second largest required for ej. check
 
 #define F3BOD_SIZE(fltSize, numEpochs) (12 + 4*sizeof(long double) + 6*fltSize*(1 + 3*numEpochs))
+
+namespace gml {
+    template <Numeric>
+    class ffnn;
+}
+
+template <typename D, typename W> requires (std::is_floating_point_v<D> && std::is_floating_point_v<W>)
+W eval_loss(const gml::ffnn<W> &nn,
+            const std::vector<std::string> &files,
+            uint64_t ppf,
+            // uint64_t batch_size,
+            std::mt19937_64 &rng,
+            std::uniform_int_distribution<uint64_t> &dist);
 
 namespace gtd {
     std::pair<long double, long double> esc_vel_mags_com(long double m1, long double m2, long double sep) {
@@ -539,6 +553,13 @@ namespace gtd {
             template <typename U> requires (std::is_floating_point_v<U>)
             friend void preprocess(const char*, const char*, std::unique_ptr<std::vector<std::string>>&,
                                    std::unique_ptr<std::vector<std::string>>&, normaliser<U> &_norm, bool);
+            template <typename D, typename W> requires (std::is_floating_point_v<D> && std::is_floating_point_v<W>)
+            friend W (::eval_loss)(const gml::ffnn<W> &nn,
+                                   const std::vector<std::string> &files,
+                                   uint64_t ppf,
+                                   // uint64_t batch_size,
+                                   std::mt19937_64 &rng,
+                                   std::uniform_int_distribution<uint64_t> &dist);
         };
         template <bool _chk>
         class entry_it<false, _chk> {
@@ -913,6 +934,13 @@ namespace gtd {
         template <typename U> requires (std::is_floating_point_v<U>)
         friend void preprocess(const char*, const char*, std::unique_ptr<std::vector<std::string>>&,
                                std::unique_ptr<std::vector<std::string>>&, normaliser<U> &_norm, bool);
+        template <typename D, typename W> requires (std::is_floating_point_v<D> && std::is_floating_point_v<W>)
+        friend W (::eval_loss)(const gml::ffnn<W> &nn,
+                               const std::vector<std::string> &files,
+                               uint64_t ppf,
+                               // uint64_t batch_size,
+                               std::mt19937_64 &rng,
+                               std::uniform_int_distribution<uint64_t> &dist);
     };
     // Here I define a trivial class used to compare two `std::thread` objects, such that `std::thread` objects can be
     // added to an `std::set`, where the `Compare` type is set to `thread_comparator`:

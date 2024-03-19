@@ -5,6 +5,7 @@
 #include "nnsup.hpp"
 #include <csignal>
 #include <atomic>
+#include <sys/wait.h>
 
 #define NORM_RGX std::regex{R"(^--norm=(m|l)?t?p?v?$)"} // improve this regex
 #define LAYERS_RGX std::regex{R"(^--layers=\d{1,17}-\d{1,17}:\d{1,8}(,\d{1,17}-\d{1,17}:\d{1,8})*$)"}
@@ -14,6 +15,7 @@
 #define DEF_PPF ((uint64_t) 1'000)
 #define DEF_REC_FREQ ((uint64_t) 1)
 #define DEF_LOSS_PREC 10
+#define DEF_VAL_PPF ((uint64_t) 1'000)
 
 // std::atomic<bool> received_signal{false};
 std::atomic<int> signal_number{};
@@ -26,9 +28,16 @@ void signal_handler(int signal) {
 uint64_t tlossrf;
 uint64_t vlossrf;
 
+uint64_t val_ppf{}; // number of pairs per file to use when assessing performance on validation set
+
 std::streamsize loss_prec{};
 
 std::ofstream logger{}; // global so I don't have to worry about passing it to functions
+
+void efunc() {
+    if (logger.is_open())
+        logger.close();
+}
 
 template <typename T> requires (std::is_floating_point_v<T>)
 gtd::normaliser<T> *get_normaliser(const char *norm_arg) {
@@ -223,6 +232,50 @@ std::ostream &format_seconds(std::ostream &os, long double seconds) {
               << &("s, and "[mins == 1]) << seconds << " second" << "s"[seconds == 1];
 }
 
+template <typename D, typename W> requires (std::is_floating_point_v<D> && std::is_floating_point_v<W>)
+W eval_loss(const gml::ffnn<W> &nn,
+            const std::vector<std::string> &files,
+            uint64_t ppf,
+            // uint64_t batch_size,
+            std::mt19937_64 &rng,
+            std::uniform_int_distribution<uint64_t> &dist) {
+    uint64_t _pc;
+    gml::vector<D> _input{(uint64_t) 22};
+    gml::vector<D> _y{(uint64_t) 18};
+    W _loss = 0;
+    uint64_t input_idx;
+    uint64_t output_idx;
+    uint64_t _temp;
+    const typename gtd::f3bodr<D>::hdr_t *_header{};
+    for (const std::string &_s : files) {
+        gtd::f3bodr<D> reader{_s.c_str()};
+        _header = &reader.hdr;
+        if (_header->N <= 1)
+            continue;
+        _input[0] = _header->masses[0];
+        _input[1] = _header->masses[1];
+        _input[2] = _header->masses[2];
+        dist.param(std::uniform_int_distribution<uint64_t>::param_type{0, _header->N - 1});
+        _pc = ppf;
+        while (_pc --> 0) {
+            do {
+                input_idx = dist(rng);
+                output_idx = dist(rng);
+            } while (input_idx == output_idx);
+            if (input_idx > output_idx) {
+                _temp = input_idx;
+                input_idx = output_idx;
+                output_idx = _temp;
+            }
+            gml::gen::memcopy(_input.begin() + 3, reader.entry_at(input_idx).positions, sizeof(D), 18);
+            _input[21] = _header->dt*(output_idx - input_idx);
+            gml::gen::memcopy(_y.begin(), reader.entry_at(output_idx).positions, sizeof(D), 18);
+            _loss += nn.fpass_loss(_input, _y);
+        }
+    }
+    return _loss/(ppf*files.size()); // return mean loss
+}
+
 template <typename D, typename W>
 void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
                       std::unique_ptr<std::vector<std::string>> &val_files,
@@ -241,8 +294,9 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
     typename std::vector<std::string>::size_type num_train_files = train_files->size();
     // if (batch_size > train_size)
     //     throw std::invalid_argument{"Error: batch size cannot be greater than number of examples in training set.\n"};
+    uint64_t one_pass_texamples = num_train_files*pairs_per_file;
     uint64_t tot_examples;
-    if (batch_size > (tot_examples = num_passes*num_train_files*pairs_per_file))
+    if (batch_size > (tot_examples = num_passes*one_pass_texamples))
         throw std::invalid_argument{"Error: batch size cannot be greater than the total number of training examples "
                                     "that will be seen.\n"};
     if (!batch_size)
@@ -269,7 +323,7 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
     gml::vector<D> _input{(uint64_t) 22};
     gml::vector<D> _y{(uint64_t) 18};
     const gml::vector<W> *_f;
-    W _tloss; // loss per training example
+    W _tloss{}; // cumulative loss per training example
     W _mloss; // mean loss across batch
     gml::ffnn<W> net;
     if (layer_str)
@@ -292,12 +346,33 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
         logger << "\"float\"\n";
     logger << "Size of data f.p. type = " << sizeof(D) << " bytes\n";
     char *_ltime{};
-    uint64_t trf_counter = 0;
+    // uint64_t trf_counter = 0;
     std::ofstream tlosses{"train_losses.csv", std::ios_base::out | std::ios_base::trunc};
     if (!tlosses.good())
         throw std::ios_base::failure{"Error: could not open \"train_losses.csv\" file.\n"};
-    tlosses << "epoch,file,pair,loss\r\n";
+    // tlosses << "epoch,file,pair,loss\r\n";
+    tlosses << "epoch,mean_loss\r\n";
     tlosses.precision(loss_prec);
+    tlosses << "0," << eval_loss<D, W>(net, *train_files, pairs_per_file, rng, dist) << "\r\n" << std::flush;
+    std::unique_ptr<std::ofstream> vlosses{};
+    pid_t _pid;
+    if (val_files) {
+        vlosses.reset(new std::ofstream{"val_losses.csv", std::ios_base::out | std::ios_base::trunc});
+        if ((_pid = fork()) == -1)
+            throw std::runtime_error{"Error: fork() error.\n"};
+        else if (!_pid) {
+            vlosses->precision(loss_prec);
+            *vlosses << "epoch,mean_loss\r\n";
+            *vlosses << "0," << eval_loss<D, W>(net, *val_files, pairs_per_file, rng, dist) << "\r\n";
+            vlosses->close(); // only closes the `std::ofstream` object in the child, FD stays open for parent
+            return;
+        }
+        else {
+            if (!num_passes) // impossible by this point, but I still feel more comfortable with this
+                wait(nullptr);
+        }
+    }
+    // W prev_loss = -1;
     // make separate branch for val if `val_files` and only there open file
     if (alloc) {
         std::vector<gtd::f3bodr<D>> readers{};
@@ -311,12 +386,12 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
         delete [] _ltime;
         _start = std::chrono::system_clock::now();
         // think about recording epoch 0 loss (have to add stuff in `gregffnn.hpp`)
-        while (tcounter++ < num_passes) {
+        while (tcounter < num_passes) {
             std::shuffle(readers.begin(), readers.end(), rng); // to make sure data is never presented in same order
             // bcounter = 0;
+            _tloss = 0;
             fcounter = 0;
             for (const gtd::f3bodr<D> &_rdr : readers) {
-                ++fcounter;
                 header = &_rdr.header();
                 if (header->N <= 1) // case for empty or single-entry .3bod/.3bodpp file
                     continue;
@@ -325,7 +400,7 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
                 _input[1] = header->masses[1];
                 _input[2] = header->masses[2];
                 pcounter = 0;
-                while (pcounter++ < pairs_per_file) {
+                while (pcounter < pairs_per_file) {
                     rand_idx:
                     idx_lo = dist(rng);
                     idx_hi = dist(rng);
@@ -341,18 +416,21 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
                     _input[21] = (idx_hi - idx_lo)*header->dt; // time-step between input and output
                     _f = &net.forward_pass(_input);
                     gml::gen::copy(_y.begin(), _rdr.entry_at(idx_hi).positions, 18);
-                    _tloss = net.backward_pass(_y);
+                    _tloss += net.backward_pass(_y);
                     // std::cerr << "T loss: " << _tloss << std::endl;
                     if (++bcounter == batch_size) {
                         _mloss = net.update_params(_lr);
                         bcounter = 0;
                         std::cout << "Loss: " << _mloss << std::endl;
-                        if (++trf_counter == tlossrf) {
-                            tlosses << tcounter << ',' << fcounter << ',' << pcounter << ',' << _mloss << "\r\n";
-                            trf_counter = 0;
-                        }
+                        // if (++trf_counter == tlossrf) {
+                        //     tlosses << tcounter << ',' << fcounter << ',' << pcounter << ',' << _mloss << "\r\n";
+                        //     trf_counter = 0;
+                        // }
                     }
+                    ++pcounter;
                     if (signal_number.load()) {
+                        if (pcounter == pairs_per_file)
+                            ++fcounter;
                         std::cout << "Received signal ";
                         switch (signal_number.load()) {
                             case SIGINT:
@@ -367,9 +445,26 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
                             case SIGQUIT:
                                 std::cout << "SIGQUIT";
                         }
+                        // Maybe have to wait here for val. set to finish?
+                        if (val_files)
+                            wait(nullptr);
                         std::cout << ".\nStopping training and saving weights...\n";
                         goto _out;
                     }
+                }
+                ++fcounter;
+            }
+            tlosses << ++tcounter << ',' << _tloss/one_pass_texamples << "\r\n" << std::flush;
+            if (val_files) {
+                wait(nullptr); // must reap child process
+                if ((_pid = fork()) == -1)
+                    throw std::runtime_error{"Error: fork() error.\n"};
+                else if (!_pid) {
+                    readers.clear();
+                    *vlosses << tcounter << ',' << eval_loss<D, W>(net, *val_files, pairs_per_file, rng, dist)
+                             << "\r\n" << std::flush;
+                    vlosses->close(); // again, only closes object in child, file descriptor stays open
+                    return;
                 }
             }
         }
@@ -390,7 +485,9 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
     logger << "Training end time: " << _ltime << '\n';
     delete [] _ltime;
     tlosses.close();
-    logger << "Actual num. passes over training set = " << (signal_number.load() ? tcounter - 1 : tcounter) << '\n';
+    logger << "Actual num. passes over training set = " // all the extra `long double` casts are mostly just to silence
+           << (signal_number.load() ? ((long double) tcounter) + // my IDE's complaints (only one cast is necessary)
+           ((long double) (fcounter*pcounter))/((long double) one_pass_texamples) : (long double) tcounter) << '\n';
     try {
         if (output_nnw) {
             std::cout << "Neural Network weights written to \"" << net.to_nnw(output_nnw) << "\"." << std::endl;
@@ -414,7 +511,7 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
                    (seconds = std::chrono::duration_cast<std::chrono::nanoseconds>(_end - _start).count()/BILLION))
               << std::endl;
     logger << "Total training time = " << seconds << " seconds\n";
-    logger.close();
+    // logger.close();
 }
 
 int main(int argc, char **argv) {
@@ -432,6 +529,10 @@ int main(int argc, char **argv) {
     }
     if (signal(SIGQUIT, signal_handler) == SIG_ERR) {
         std::cerr << "Error: could not register signal_handler() with signal() for SIGQUIT.\n";
+        return 1;
+    }
+    if (atexit(efunc) != 0) {
+        std::cerr << "atexit() error.\n";
         return 1;
     }
     printf("PID: %" PRIu64 "\n----------------\n", (uint64_t) getpid());
@@ -579,10 +680,15 @@ int main(int argc, char **argv) {
     const char *edir = parser.get_arg("-o");
     tlossrf = parser.get_arg("--tloss_rec_freq", DEF_REC_FREQ);
     vlossrf = parser.get_arg("--vloss_rec_freq", DEF_REC_FREQ);
+    val_ppf = parser.get_arg("--val_ppf", DEF_VAL_PPF);
     if (!parser.empty()) {
         std::cerr << "Error: unrecognised arguments:\n";
         for (const auto &[_, arg] : parser)
             fprintf(stderr, "\t%s\n", arg.c_str());
+        return 1;
+    }
+    if (!val_ppf) {
+        std::cerr << "Error: number of validation pairs per file to use cannot be zero.\n";
         return 1;
     }
     if (!tlossrf || !vlossrf) {
