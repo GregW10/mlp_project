@@ -26,13 +26,14 @@ namespace gml {
     class ffnn;
 }
 
-template <typename D, typename W> requires (std::is_floating_point_v<D> && std::is_floating_point_v<W>)
-W eval_loss(const gml::ffnn<W> &nn,
-            const std::vector<std::string> &files,
-            uint64_t ppf,
-            // uint64_t batch_size,
-            std::mt19937_64 &rng,
-            std::uniform_int_distribution<uint64_t> &dist);
+template <typename D, typename W, bool compute> requires (std::is_floating_point_v<D> && std::is_floating_point_v<W>)
+W eval_loss(const gml::ffnn<W>&,
+            const std::vector<std::string>&,
+            uint64_t,
+            std::mt19937_64&,
+            std::uniform_int_distribution<uint64_t>&,
+            std::unique_ptr<uint64_t>&,
+            uint64_t*);
 
 namespace gtd {
     std::pair<long double, long double> esc_vel_mags_com(long double m1, long double m2, long double sep) {
@@ -553,13 +554,15 @@ namespace gtd {
             template <typename U> requires (std::is_floating_point_v<U>)
             friend void preprocess(const char*, const char*, std::unique_ptr<std::vector<std::string>>&,
                                    std::unique_ptr<std::vector<std::string>>&, normaliser<U> &_norm, bool);
-            template <typename D, typename W> requires (std::is_floating_point_v<D> && std::is_floating_point_v<W>)
-            friend W (::eval_loss)(const gml::ffnn<W> &nn,
-                                   const std::vector<std::string> &files,
-                                   uint64_t ppf,
-                                   // uint64_t batch_size,
-                                   std::mt19937_64 &rng,
-                                   std::uniform_int_distribution<uint64_t> &dist);
+            template <typename D, typename W, bool compute>
+            requires (std::is_floating_point_v<D> && std::is_floating_point_v<W>)
+            friend W (::eval_loss)(const gml::ffnn<W>&,
+                                   const std::vector<std::string>&,
+                                   uint64_t,
+                                   std::mt19937_64&,
+                                   std::uniform_int_distribution<uint64_t>&,
+                                   std::unique_ptr<uint64_t>&,
+                                   uint64_t*);
         };
         template <bool _chk>
         class entry_it<false, _chk> {
@@ -934,13 +937,15 @@ namespace gtd {
         template <typename U> requires (std::is_floating_point_v<U>)
         friend void preprocess(const char*, const char*, std::unique_ptr<std::vector<std::string>>&,
                                std::unique_ptr<std::vector<std::string>>&, normaliser<U> &_norm, bool);
-        template <typename D, typename W> requires (std::is_floating_point_v<D> && std::is_floating_point_v<W>)
-        friend W (::eval_loss)(const gml::ffnn<W> &nn,
-                               const std::vector<std::string> &files,
-                               uint64_t ppf,
-                               // uint64_t batch_size,
-                               std::mt19937_64 &rng,
-                               std::uniform_int_distribution<uint64_t> &dist);
+        template <typename D, typename W, bool compute>
+        requires (std::is_floating_point_v<D> && std::is_floating_point_v<W>)
+        friend W (::eval_loss)(const gml::ffnn<W>&,
+                               const std::vector<std::string>&,
+                               uint64_t,
+                               std::mt19937_64&,
+                               std::uniform_int_distribution<uint64_t>&,
+                               std::unique_ptr<uint64_t>&,
+                               uint64_t*);
     };
     // Here I define a trivial class used to compare two `std::thread` objects, such that `std::thread` objects can be
     // added to an `std::set`, where the `Compare` type is set to `thread_comparator`:

@@ -381,7 +381,7 @@ template <typename T> requires (std::is_floating_point_v<T>)
     << std::boolalpha << ((bool) (hdr.lds_coll & 0b00000001))
     << HDFCOL UDL "\nsizeof(long double):" UDLRST " " NNCOL
     << (hdr.lds_coll >> 1) << UCOL " bytes\n" HDFCOL UDL "Time-step:" UDLRST " " NNCOL
-    << hdr.dt << UCOL " seconds\n" HDFCOL UDL "Num. Epochs:" UDLRST " " NNCOL << hdr.N
+    << hdr.dt << UCOL " s\n" HDFCOL UDL "Num. Epochs:" UDLRST " " NNCOL << hdr.N
     << HDFCOL UDL "\nMasses:\n" UDLRST
     << BTCOL "\tBody " BNCOL "1" BTCOL ": " NNCOL << hdr.masses[0]
     << UCOL " kg\n\t" BTCOL "Body " BNCOL "2" BTCOL ": " NNCOL << hdr.masses[1]

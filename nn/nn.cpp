@@ -25,8 +25,8 @@ void signal_handler(int signal) {
     signal_number.store(signal);
 }
 
-uint64_t tlossrf;
-uint64_t vlossrf;
+// uint64_t tlossrf;
+// uint64_t vlossrf;
 
 uint64_t val_ppf{}; // number of pairs per file to use when assessing performance on validation set
 
@@ -232,13 +232,21 @@ std::ostream &format_seconds(std::ostream &os, long double seconds) {
               << &("s, and "[mins == 1]) << seconds << " second" << "s"[seconds == 1];
 }
 
-template <typename D, typename W> requires (std::is_floating_point_v<D> && std::is_floating_point_v<W>)
+inline uint64_t poss_pairs(uint64_t epochs) {
+    return (epochs*(epochs - 1))/2;
+}
+
+template <typename D, typename W, bool compute> requires (std::is_floating_point_v<D> && std::is_floating_point_v<W>)
 W eval_loss(const gml::ffnn<W> &nn,
             const std::vector<std::string> &files,
             uint64_t ppf,
             // uint64_t batch_size,
             std::mt19937_64 &rng,
-            std::uniform_int_distribution<uint64_t> &dist) {
+            std::uniform_int_distribution<uint64_t> &dist,
+            std::unique_ptr<uint64_t> &max_ppf,
+            uint64_t *_ntex) {
+    if (!max_ppf)
+        throw std::invalid_argument{"Error: max pairs per file std::unique_ptr cannot hold nullptr.\n"};
     uint64_t _pc;
     gml::vector<D> _input{(uint64_t) 22};
     gml::vector<D> _y{(uint64_t) 18};
@@ -247,6 +255,9 @@ W eval_loss(const gml::ffnn<W> &nn,
     uint64_t output_idx;
     uint64_t _temp;
     const typename gtd::f3bodr<D>::hdr_t *_header{};
+    uint64_t *_ptr = max_ppf.get();
+    uint64_t _nm1;
+    uint64_t _count = 0;
     for (const std::string &_s : files) {
         gtd::f3bodr<D> reader{_s.c_str()};
         _header = &reader.hdr;
@@ -255,25 +266,45 @@ W eval_loss(const gml::ffnn<W> &nn,
         _input[0] = _header->masses[0];
         _input[1] = _header->masses[1];
         _input[2] = _header->masses[2];
-        dist.param(std::uniform_int_distribution<uint64_t>::param_type{0, _header->N - 1});
-        _pc = ppf;
-        while (_pc --> 0) {
-            do {
-                input_idx = dist(rng);
-                output_idx = dist(rng);
-            } while (input_idx == output_idx);
-            if (input_idx > output_idx) {
-                _temp = input_idx;
-                input_idx = output_idx;
-                output_idx = _temp;
-            }
-            gml::gen::memcopy(_input.begin() + 3, reader.entry_at(input_idx).positions, sizeof(D), 18);
-            _input[21] = _header->dt*(output_idx - input_idx);
-            gml::gen::memcopy(_y.begin(), reader.entry_at(output_idx).positions, sizeof(D), 18);
-            _loss += nn.fpass_loss(_input, _y);
+        if constexpr (compute) {
+            *_ptr = poss_pairs(_header->N);
         }
+        if (*_ptr > ppf) {
+            dist.param(std::uniform_int_distribution<uint64_t>::param_type{0, _header->N - 1});
+            _pc = ppf;
+            while (_pc --> 0) {
+                do {
+                    input_idx = dist(rng);
+                    output_idx = dist(rng);
+                } while (input_idx == output_idx);
+                if (input_idx > output_idx) {
+                    _temp = input_idx;
+                    input_idx = output_idx;
+                    output_idx = _temp;
+                }
+                gml::gen::memcopy(_input.begin() + 3, reader.entry_at(input_idx).positions, sizeof(D), 18);
+                _input[21] = _header->dt*(output_idx - input_idx);
+                gml::gen::memcopy(_y.begin(), reader.entry_at(output_idx).positions, sizeof(D), 18);
+                _loss += nn.fpass_loss(_input, _y);
+                ++_count;
+            }
+        } else { // else iterate over all possible pairs
+            _nm1 = _header->N - 1;
+            for (input_idx = 0; input_idx < _nm1; ++input_idx) {
+                gml::gen::memcopy(_input.begin() + 3, reader.entry_at(input_idx).positions, sizeof(D), 18);
+                _input[21] = _header->dt*(output_idx - input_idx);
+                for (output_idx = input_idx + 1; output_idx < _header->N; ++output_idx) {
+                    gml::gen::memcopy(_y.begin(), reader.entry_at(output_idx).positions, sizeof(D), 18);
+                    _loss += nn.fpass_loss(_input, _y);
+                    ++_count;
+                }
+            }
+        }
+        ++_ptr;
     }
-    return _loss/(ppf*files.size()); // return mean loss
+    if (_ntex)
+        *_ntex = _count;
+    return _loss/_count; // return mean loss
 }
 
 template <typename D, typename W>
@@ -294,7 +325,7 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
     typename std::vector<std::string>::size_type num_train_files = train_files->size();
     // if (batch_size > train_size)
     //     throw std::invalid_argument{"Error: batch size cannot be greater than number of examples in training set.\n"};
-    uint64_t one_pass_texamples = num_train_files*pairs_per_file;
+    uint64_t one_pass_texamples = num_train_files*pairs_per_file;//maximum possible, could end up being less (see below)
     uint64_t tot_examples;
     if (batch_size > (tot_examples = num_passes*one_pass_texamples))
         throw std::invalid_argument{"Error: batch size cannot be greater than the total number of training examples "
@@ -304,16 +335,17 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
     if (layer_str && from_model)
         throw std::invalid_argument{"Error: either the model can be built from scratch, or loaded from a .nnw file, "
                                     "but not both!\n"};
-    uint64_t tot_updates = tot_examples/batch_size;
-    if (tlossrf > tot_updates || vlossrf > tot_updates) // check this
-        throw std::logic_error{"Error: neither loss recording frequency cannot be greater than the total number of "
-                               "weight updates foreseen to occur.\n"};
+    uint64_t tot_updates = tot_examples/batch_size + (tot_examples % batch_size != 0);
+    // if (tlossrf > tot_updates || vlossrf > tot_updates) // check this
+    //     throw std::logic_error{"Error: neither loss recording frequency cannot be greater than the total number of "
+    //                            "weight updates foreseen to occur.\n"};
+    logger << "Total num. weight updates foreseen = " << tot_updates << std::endl;
     std::chrono::time_point<std::chrono::system_clock> _start;
     std::chrono::time_point<std::chrono::system_clock> _end;
-    uint64_t tcounter = 0;
-    uint64_t bcounter = 0;
-    uint64_t pcounter;
-    uint64_t fcounter;
+    uint64_t tcounter = 0; // counter for loop over entire training set
+    uint64_t bcounter = 0; // counter for number of forward/backward passes done, reset to zero when weights are updated
+    uint64_t pcounter; // counter for loop over pairs in a given file, not used if num. poss. pairs < pairs_per_file
+    // uint64_t fcounter;
     std::mt19937_64 rng{std::random_device{}()};
     std::uniform_int_distribution<uint64_t> dist{};
     const typename gtd::f3bodr<D>::hdr_t *header{};
@@ -344,36 +376,51 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
         logger << "\"double\"\n";
     else
         logger << "\"float\"\n";
-    logger << "Size of data f.p. type = " << sizeof(D) << " bytes\n";
+    logger << "Size of data f.p. type = " << sizeof(D) << " bytes" << std::endl; // have to flush
     char *_ltime{};
     // uint64_t trf_counter = 0;
     std::ofstream tlosses{"train_losses.csv", std::ios_base::out | std::ios_base::trunc};
     if (!tlosses.good())
         throw std::ios_base::failure{"Error: could not open \"train_losses.csv\" file.\n"};
+    std::unique_ptr<uint64_t> max_tppf{new uint64_t[num_train_files]};
+    std::unique_ptr<uint64_t> max_vppf{};
     // tlosses << "epoch,file,pair,loss\r\n";
     tlosses << "epoch,mean_loss\r\n";
     tlosses.precision(loss_prec);
-    tlosses << "0," << eval_loss<D, W>(net, *train_files, pairs_per_file, rng, dist) << "\r\n" << std::flush;
+    tlosses << "0,"
+            << eval_loss<D, W, true>(net, *train_files, pairs_per_file, rng, dist, max_tppf, &one_pass_texamples)
+            << "\r\n" << std::flush;
     std::unique_ptr<std::ofstream> vlosses{};
     pid_t _pid;
     if (val_files) {
         vlosses.reset(new std::ofstream{"val_losses.csv", std::ios_base::out | std::ios_base::trunc});
+        if (!vlosses->good()) {
+            val_files.reset();
+            std::cerr << "Error: \"val_losses.csv\" could not be opened. Proceeding without recording val. perf.\n";
+            goto _rest;
+        }
+        max_vppf.reset(new uint64_t[val_files->size()]);
+        vlosses->precision(loss_prec);
         if ((_pid = fork()) == -1)
             throw std::runtime_error{"Error: fork() error.\n"};
         else if (!_pid) {
-            vlosses->precision(loss_prec);
             *vlosses << "epoch,mean_loss\r\n";
-            *vlosses << "0," << eval_loss<D, W>(net, *val_files, pairs_per_file, rng, dist) << "\r\n";
+            *vlosses << "0," << eval_loss<D, W, true>(net, *val_files, val_ppf, rng, dist, max_vppf, nullptr) << "\r\n";
             vlosses->close(); // only closes the `std::ofstream` object in the child, FD stays open for parent
             return;
         }
-        else {
-            if (!num_passes) // impossible by this point, but I still feel more comfortable with this
-                wait(nullptr);
-        }
+        // else {
+        //     if (!num_passes) // impossible by this point, but I still feel more comfortable with this
+        //         wait(nullptr);
+        // }
     }
+    _rest:
     // W prev_loss = -1;
     // make separate branch for val if `val_files` and only there open file
+    uint64_t tot_fbp = 0; // total number of forwards/backwards passes through the NN
+    uint64_t tot_wu = 0; // total number of weight updates
+    uint64_t *_ptr; // pointer to array of max. poss. num. of pairs per file
+    uint64_t _nm1;
     if (alloc) {
         std::vector<gtd::f3bodr<D>> readers{};
         readers.reserve(num_train_files);
@@ -390,78 +437,122 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
             std::shuffle(readers.begin(), readers.end(), rng); // to make sure data is never presented in same order
             // bcounter = 0;
             _tloss = 0;
-            fcounter = 0;
+            // fcounter = 0;
+            _ptr = max_tppf.get();
             for (const gtd::f3bodr<D> &_rdr : readers) {
                 header = &_rdr.header();
                 if (header->N <= 1) // case for empty or single-entry .3bod/.3bodpp file
                     continue;
-                dist.param(std::uniform_int_distribution<uint64_t>::param_type{0, header->N - 1});
                 _input[0] = header->masses[0];
                 _input[1] = header->masses[1];
                 _input[2] = header->masses[2];
-                pcounter = 0;
-                while (pcounter < pairs_per_file) {
-                    rand_idx:
-                    idx_lo = dist(rng);
-                    idx_hi = dist(rng);
-                    if (idx_lo == idx_hi)
-                        goto rand_idx;
-                    if (idx_lo > idx_hi) {
-                        idx_temp = idx_lo;
-                        idx_lo = idx_hi;
-                        idx_hi = idx_temp;
-                    }
-                    // forward and backwards passes
-                    gml::gen::copy(_input.begin() + 3, _rdr.entry_at(idx_lo).positions, 18);
-                    _input[21] = (idx_hi - idx_lo)*header->dt; // time-step between input and output
-                    _f = &net.forward_pass(_input);
-                    gml::gen::copy(_y.begin(), _rdr.entry_at(idx_hi).positions, 18);
-                    _tloss += net.backward_pass(_y);
-                    // std::cerr << "T loss: " << _tloss << std::endl;
-                    if (++bcounter == batch_size) {
-                        _mloss = net.update_params(_lr);
-                        bcounter = 0;
-                        std::cout << "Loss: " << _mloss << std::endl;
-                        // if (++trf_counter == tlossrf) {
-                        //     tlosses << tcounter << ',' << fcounter << ',' << pcounter << ',' << _mloss << "\r\n";
-                        //     trf_counter = 0;
-                        // }
-                    }
-                    ++pcounter;
-                    if (signal_number.load()) {
-                        if (pcounter == pairs_per_file)
-                            ++fcounter;
-                        std::cout << "Received signal ";
-                        switch (signal_number.load()) {
-                            case SIGINT:
-                                std::cout << "SIGINT";
-                                break;
-                            case SIGTERM:
-                                std::cout << "SIGTERM";
-                                break;
-                            case SIGHUP:
-                                std::cout << "SIGHUP";
-                                break;
-                            case SIGQUIT:
-                                std::cout << "SIGQUIT";
+                if (*_ptr++ > pairs_per_file) {
+                    dist.param(std::uniform_int_distribution<uint64_t>::param_type{0, header->N - 1});
+                    pcounter = 0;
+                    while (pcounter++ < pairs_per_file) {
+                        rand_idx:
+                        idx_lo = dist(rng);
+                        idx_hi = dist(rng);
+                        if (idx_lo == idx_hi)
+                            goto rand_idx;
+                        if (idx_lo > idx_hi) {
+                            idx_temp = idx_lo;
+                            idx_lo = idx_hi;
+                            idx_hi = idx_temp;
                         }
-                        // Maybe have to wait here for val. set to finish?
-                        if (val_files)
-                            wait(nullptr);
-                        std::cout << ".\nStopping training and saving weights...\n";
-                        goto _out;
+                        // forward and backwards passes
+                        gml::gen::copy(_input.begin() + 3, _rdr.entry_at(idx_lo).positions, 18);
+                        _input[21] = (idx_hi - idx_lo)*header->dt; // time-step between input and output
+                        _f = &net.forward_pass(_input);
+                        gml::gen::copy(_y.begin(), _rdr.entry_at(idx_hi).positions, 18);
+                        _tloss += net.backward_pass(_y);
+                        ++tot_fbp;
+                        // std::cerr << "T loss: " << _tloss << std::endl;
+                        if (++bcounter == batch_size) {
+                            _mloss = net.update_params(_lr);
+                            bcounter = 0;
+                            ++tot_wu;
+                            std::cout << "Loss: " << _mloss << std::endl;
+                            // if (++trf_counter == tlossrf) {
+                            //     tlosses << tcounter << ',' << fcounter << ',' << pcounter << ',' << _mloss << "\r\n";
+                            //     trf_counter = 0;
+                            // }
+                        }
+                        // ++pcounter;
+                        if (signal_number.load()) {
+                            // if (pcounter == pairs_per_file)
+                            //     ++fcounter;
+                            std::cout << "Received signal ";
+                            switch (signal_number.load()) {
+                                case SIGINT:
+                                    std::cout << "SIGINT";
+                                    break;
+                                case SIGTERM:
+                                    std::cout << "SIGTERM";
+                                    break;
+                                case SIGHUP:
+                                    std::cout << "SIGHUP";
+                                    break;
+                                case SIGQUIT:
+                                    std::cout << "SIGQUIT";
+                            }
+                            std::cout << ".\nStopping training and saving weights...\n";
+                            goto _out;
+                        }
+                    }
+                } else {
+                    _nm1 = header->N - 1;
+                    for (idx_lo = 0; idx_lo < _nm1; ++idx_lo) {
+                        gml::gen::copy(_input.begin() + 3, _rdr.entry_at(idx_lo).positions, 18);
+                        _input[21] = (idx_hi - idx_lo)*header->dt; // time-step between input and output
+                        for (idx_hi = idx_lo + 1; idx_hi < header->N; ++idx_hi) {
+                            _f = &net.forward_pass(_input);
+                            gml::gen::copy(_y.begin(), _rdr.entry_at(idx_hi).positions, 18);
+                            _tloss += net.backward_pass(_y);
+                            ++tot_fbp;
+                            if (++bcounter == batch_size) {
+                                _mloss = net.update_params(_lr);
+                                bcounter = 0;
+                                ++tot_wu;
+                                std::cout << "Loss: " << _mloss << std::endl;
+                            }
+                            // ++pcounter;
+                            if (signal_number.load()) {
+                                // if (pcounter == pairs_per_file)
+                                //     ++fcounter;
+                                std::cout << "Received signal ";
+                                switch (signal_number.load()) {
+                                    case SIGINT:
+                                        std::cout << "SIGINT";
+                                        break;
+                                    case SIGTERM:
+                                        std::cout << "SIGTERM";
+                                        break;
+                                    case SIGHUP:
+                                        std::cout << "SIGHUP";
+                                        break;
+                                    case SIGQUIT:
+                                        std::cout << "SIGQUIT";
+                                }
+                                std::cout << ".\nStopping training and saving weights...\n";
+                                goto _out;
+                            }
+                        }
                     }
                 }
-                ++fcounter;
+                // ++fcounter;
             }
             tlosses << ++tcounter << ',' << _tloss/one_pass_texamples << "\r\n" << std::flush;
             if (val_files) {
                 wait(nullptr); // must reap child process
-                if ((_pid = fork()) == -1)
-                    throw std::runtime_error{"Error: fork() error.\n"};
+                if ((_pid = fork()) == -1) {
+                    std::cerr << "Error: fork() error.\n";//throw std::runtime_error{"Error: fork() error.\n"};
+                    continue; // not a reason to terminate program, just means val. perf. doesn't get logged
+                }
                 else if (!_pid) {
                     readers.clear();
-                    *vlosses << tcounter << ',' << eval_loss<D, W>(net, *val_files, pairs_per_file, rng, dist)
+                    *vlosses << tcounter << ','
+                             << eval_loss<D, W, false>(net, *val_files, val_ppf, rng, dist, max_vppf, nullptr)
                              << "\r\n" << std::flush;
                     vlosses->close(); // again, only closes object in child, file descriptor stays open
                     return;
@@ -475,19 +566,25 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
             }
         } */
     }
+    _out:
     if (bcounter) {
         _mloss = net.update_params(_lr);
-        std::cout << "Loss: " << _mloss << std::endl;
+        std::cout << "Loss at truncated batch " << bcounter << '/' << batch_size << ": " << _mloss << std::endl;
     }
-    _out:
+    if (val_files) {
+        std::cout << "Waiting for validation set process with PID " << _pid << " to finish..." << std::endl;
+        wait(nullptr);
+    }
     _end = std::chrono::system_clock::now();
     _ltime = gml::gen::now_str();
     logger << "Training end time: " << _ltime << '\n';
     delete [] _ltime;
     tlosses.close();
-    logger << "Actual num. passes over training set = " // all the extra `long double` casts are mostly just to silence
-           << (signal_number.load() ? ((long double) tcounter) + // my IDE's complaints (only one cast is necessary)
-           ((long double) (fcounter*pcounter))/((long double) one_pass_texamples) : (long double) tcounter) << '\n';
+    logger << "Total number of forwards/backwards passes = " << tot_fbp << "\nTotal number of weight updates = "
+           << tot_wu << "\nTotal number of complete passes over training set = " << tcounter << '\n';
+    // logger << "Actual num. passes over training set = " // all the extra `long double` casts are mostly just to silence
+    //        << (signal_number.load() ? ((long double) tcounter) + // my IDE's complaints (only one cast is necessary)
+    //        ((long double) (fcounter*pcounter))/((long double) one_pass_texamples) : (long double) tcounter) << '\n';
     try {
         if (output_nnw) {
             std::cout << "Neural Network weights written to \"" << net.to_nnw(output_nnw) << "\"." << std::endl;
@@ -678,9 +775,15 @@ int main(int argc, char **argv) {
     const char *layers = parser.get_arg(LAYERS_RGX);
     const char *weights_path = parser.get_arg("-n");
     const char *edir = parser.get_arg("-o");
-    tlossrf = parser.get_arg("--tloss_rec_freq", DEF_REC_FREQ);
-    vlossrf = parser.get_arg("--vloss_rec_freq", DEF_REC_FREQ);
-    val_ppf = parser.get_arg("--val_ppf", DEF_VAL_PPF);
+    // tlossrf = parser.get_arg("--tloss_rec_freq", DEF_REC_FREQ);
+    // vlossrf = parser.get_arg("--vloss_rec_freq", DEF_REC_FREQ);
+    auto _num = parser.remaining();
+    val_ppf = parser.get_arg("--val_ppf", pairs_per_file);
+    if (parser.remaining() != _num && val_dir) {
+        std::cout << "Error: \"--val_ppf\" (num. val. set pairs per file) cannot be passed if the validation set "
+                     "directory is not passed as well.\n";
+        return 1;
+    }
     if (!parser.empty()) {
         std::cerr << "Error: unrecognised arguments:\n";
         for (const auto &[_, arg] : parser)
@@ -691,10 +794,10 @@ int main(int argc, char **argv) {
         std::cerr << "Error: number of validation pairs per file to use cannot be zero.\n";
         return 1;
     }
-    if (!tlossrf || !vlossrf) {
-        std::cerr << "Error: training and validation loss rec. freq. cannot be zero.\n";
-        return 1;
-    }
+    // if (!tlossrf || !vlossrf) {
+    //     std::cerr << "Error: training and validation loss rec. freq. cannot be zero.\n";
+    //     return 1;
+    // }
     static char from_model[PATH_MAX]; // static to avoid wasting stack space
     if (model_str) {
         if (layers) {
@@ -744,11 +847,16 @@ int main(int argc, char **argv) {
     } \
     delete [] exp_info; \
     logger << "Experiment name: \"" << edir << "\"\nTraining data directory: \"" << data_dir \
-           << "\"\nValidation data directory: \"" << (val_dir ? val_dir : "(None)") << "\nNormalisation type: " \
-           << (norm_str ? norm_str + 7 : "N/A") << "\nLearning rate = " << learning_rate \
+           << "\"\nValidation data directory: \"" << (val_dir ? val_dir : "(None)") << "\"\nNormalisation type: " \
+           << (norm_str ? norm_str + 7 : "mt") << "\nLearning rate = " << learning_rate \
            << "\nRequested num. passes over training set = " << num_passes \
            << "\nNumber of pairs to generate per file = " << pairs_per_file << "\nBatch size = " << batch_size \
-           << "\nAllocate dataset: " << std::boolalpha << allocate_dataset; \
+           << "\nValidation set pairs per file = "; \
+    if (val_dir) \
+        logger << val_ppf; \
+    else \
+        logger << "(N/A)"; \
+    logger << "\nAllocate dataset: " << std::boolalpha << allocate_dataset; \
     if (model_str) \
         logger << "\nModel pre-loaded from: \"" << model_str << "\"\n"; \
     else \
