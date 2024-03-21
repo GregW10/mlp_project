@@ -1,11 +1,12 @@
-#include <algorithm>
 #include "../glib/ml/gregffnn.hpp"
 #include "../glib/misc/gregparse.hpp"
 #include "../glib/misc/gregmisc.hpp"
+#include "../glib/misc/gregmmapper.hpp"
 #include "nnsup.hpp"
 #include <csignal>
 #include <atomic>
 #include <sys/wait.h>
+#include <algorithm>
 
 #define NORM_RGX std::regex{R"(^--norm=(m|l)?t?p?v?$)"} // improve this regex
 #define LAYERS_RGX std::regex{R"(^--layers=\d{1,17}-\d{1,17}:\d{1,8}(,\d{1,17}-\d{1,17}:\d{1,8})*$)"}
@@ -243,7 +244,7 @@ W eval_loss(const gml::ffnn<W> &nn,
             // uint64_t batch_size,
             std::mt19937_64 &rng,
             std::uniform_int_distribution<uint64_t> &dist,
-            std::unique_ptr<uint64_t> &max_ppf,
+            const gtd::mmapper &max_ppf,
             uint64_t *_ntex) {
     if (!max_ppf)
         throw std::invalid_argument{"Error: max pairs per file std::unique_ptr cannot hold nullptr.\n"};
@@ -255,7 +256,7 @@ W eval_loss(const gml::ffnn<W> &nn,
     uint64_t output_idx;
     uint64_t _temp;
     const typename gtd::f3bodr<D>::hdr_t *_header{};
-    uint64_t *_ptr = max_ppf.get();
+    uint64_t *_ptr = static_cast<uint64_t*>(max_ppf.get());
     uint64_t _nm1;
     uint64_t _count = 0;
     for (const std::string &_s : files) {
@@ -292,8 +293,8 @@ W eval_loss(const gml::ffnn<W> &nn,
             _nm1 = _header->N - 1;
             for (input_idx = 0; input_idx < _nm1; ++input_idx) {
                 gml::gen::memcopy(_input.begin() + 3, reader.entry_at(input_idx).positions, sizeof(D), 18);
-                _input[21] = _header->dt*(output_idx - input_idx);
                 for (output_idx = input_idx + 1; output_idx < _header->N; ++output_idx) {
+                    _input[21] = _header->dt*(output_idx - input_idx);
                     gml::gen::memcopy(_y.begin(), reader.entry_at(output_idx).positions, sizeof(D), 18);
                     _loss += nn.fpass_loss(_input, _y);
                     ++_count;
@@ -382,8 +383,8 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
     std::ofstream tlosses{"train_losses.csv", std::ios_base::out | std::ios_base::trunc};
     if (!tlosses.good())
         throw std::ios_base::failure{"Error: could not open \"train_losses.csv\" file.\n"};
-    std::unique_ptr<uint64_t> max_tppf{new uint64_t[num_train_files]};
-    std::unique_ptr<uint64_t> max_vppf{};
+    gtd::mmapper max_tppf{num_train_files*sizeof(uint64_t)};
+    gtd::mmapper max_vppf{};
     // tlosses << "epoch,file,pair,loss\r\n";
     tlosses << "epoch,mean_loss\r\n";
     tlosses.precision(loss_prec);
@@ -395,11 +396,12 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
     if (val_files) {
         vlosses.reset(new std::ofstream{"val_losses.csv", std::ios_base::out | std::ios_base::trunc});
         if (!vlosses->good()) {
+            vlosses.reset();
             val_files.reset();
             std::cerr << "Error: \"val_losses.csv\" could not be opened. Proceeding without recording val. perf.\n";
             goto _rest;
         }
-        max_vppf.reset(new uint64_t[val_files->size()]);
+        max_vppf.reset(val_files->size()*sizeof(uint64_t));
         vlosses->precision(loss_prec);
         if ((_pid = fork()) == -1)
             throw std::runtime_error{"Error: fork() error.\n"};
@@ -438,7 +440,7 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
             // bcounter = 0;
             _tloss = 0;
             // fcounter = 0;
-            _ptr = max_tppf.get();
+            _ptr = static_cast<uint64_t*>(max_tppf.get());
             for (const gtd::f3bodr<D> &_rdr : readers) {
                 header = &_rdr.header();
                 if (header->N <= 1) // case for empty or single-entry .3bod/.3bodpp file
@@ -504,8 +506,8 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
                     _nm1 = header->N - 1;
                     for (idx_lo = 0; idx_lo < _nm1; ++idx_lo) {
                         gml::gen::copy(_input.begin() + 3, _rdr.entry_at(idx_lo).positions, 18);
-                        _input[21] = (idx_hi - idx_lo)*header->dt; // time-step between input and output
                         for (idx_hi = idx_lo + 1; idx_hi < header->N; ++idx_hi) {
+                            _input[21] = (idx_hi - idx_lo)*header->dt; // time-step between input and output
                             _f = &net.forward_pass(_input);
                             gml::gen::copy(_y.begin(), _rdr.entry_at(idx_hi).positions, 18);
                             _tloss += net.backward_pass(_y);

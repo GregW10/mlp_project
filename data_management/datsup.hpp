@@ -3,7 +3,7 @@
 
 /* Header file containing important function and class definitions for data generation and visualisation support. */
 
-#if !defined(__APPLE__) && !defined(__linux__)
+#if !defined(__APPLE__) && !defined(__linux__) && !defined(__unix__)
 #error "Can only compile on UNIX systems."
 #endif
 
@@ -26,13 +26,17 @@ namespace gml {
     class ffnn;
 }
 
+namespace gtd {
+    class mmapper;
+}
+
 template <typename D, typename W, bool compute> requires (std::is_floating_point_v<D> && std::is_floating_point_v<W>)
 W eval_loss(const gml::ffnn<W>&,
             const std::vector<std::string>&,
             uint64_t,
             std::mt19937_64&,
             std::uniform_int_distribution<uint64_t>&,
-            std::unique_ptr<uint64_t>&,
+            const gtd::mmapper&,
             uint64_t*);
 
 namespace gtd {
@@ -561,7 +565,7 @@ namespace gtd {
                                    uint64_t,
                                    std::mt19937_64&,
                                    std::uniform_int_distribution<uint64_t>&,
-                                   std::unique_ptr<uint64_t>&,
+                                   const gtd::mmapper&,
                                    uint64_t*);
         };
         template <bool _chk>
@@ -944,7 +948,7 @@ namespace gtd {
                                uint64_t,
                                std::mt19937_64&,
                                std::uniform_int_distribution<uint64_t>&,
-                               std::unique_ptr<uint64_t>&,
+                               const gtd::mmapper&,
                                uint64_t*);
     };
     // Here I define a trivial class used to compare two `std::thread` objects, such that `std::thread` objects can be
