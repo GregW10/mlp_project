@@ -262,14 +262,18 @@ W eval_loss(const gml::ffnn<W> &nn,
     for (const std::string &_s : files) {
         gtd::f3bodr<D> reader{_s.c_str()};
         _header = &reader.hdr;
-        if (_header->N <= 1)
+        if (_header->N <= 1) {
+            if constexpr (compute)
+                *_ptr = 0;
+            ++_ptr;
             continue;
+        }
         _input[0] = _header->masses[0];
         _input[1] = _header->masses[1];
         _input[2] = _header->masses[2];
-        if constexpr (compute) {
+        if constexpr (compute)
             *_ptr = poss_pairs(_header->N);
-        }
+        // std::cout << "Ptr: " << *_ptr << "N: " << _header->N << std::endl;
         if (*_ptr > ppf) {
             dist.param(std::uniform_int_distribution<uint64_t>::param_type{0, _header->N - 1});
             _pc = ppf;
@@ -336,7 +340,7 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
     if (layer_str && from_model)
         throw std::invalid_argument{"Error: either the model can be built from scratch, or loaded from a .nnw file, "
                                     "but not both!\n"};
-    uint64_t tot_updates = tot_examples/batch_size + (tot_examples % batch_size != 0);
+    uint64_t tot_updates = tot_examples/batch_size + (tot_examples % batch_size != 0); // TOO BIG - THIS OVERFLOWS
     // if (tlossrf > tot_updates || vlossrf > tot_updates) // check this
     //     throw std::logic_error{"Error: neither loss recording frequency cannot be greater than the total number of "
     //                            "weight updates foreseen to occur.\n"};
@@ -424,12 +428,14 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
     uint64_t *_ptr; // pointer to array of max. poss. num. of pairs per file
     uint64_t _nm1;
     if (alloc) {
-        std::vector<gtd::f3bodr<D>> readers{};
+        std::vector<std::pair<gtd::f3bodr<D>, uint64_t>> readers{};
         readers.reserve(num_train_files);
+        _ptr = static_cast<uint64_t*>(max_tppf.get());
         for (const std::string &_str : *train_files)
-            readers.emplace_back(_str.c_str()); // exception will occur here in case of T mismatch
+            readers.emplace_back(_str.c_str(), *_ptr++); // exception will occur here in case of T mismatch
         // delete [] train_files;
         train_files.reset();
+        max_tppf.reset();
         _ltime = gml::gen::now_str();
         logger << "Training start time: " << _ltime << '\n' << std::flush;
         delete [] _ltime;
@@ -440,15 +446,18 @@ void build_and_run_nn(std::unique_ptr<std::vector<std::string>> &train_files,
             // bcounter = 0;
             _tloss = 0;
             // fcounter = 0;
-            _ptr = static_cast<uint64_t*>(max_tppf.get());
-            for (const gtd::f3bodr<D> &_rdr : readers) {
+            // _ptr = static_cast<uint64_t*>(max_tppf.get());
+            for (const auto &[_rdr, _mppf] : readers) {
                 header = &_rdr.header();
-                if (header->N <= 1) // case for empty or single-entry .3bod/.3bodpp file
+                if (header->N <= 1) { // case for empty or single-entry .3bod/.3bodpp file
+                    // ++_ptr;
                     continue;
+                }
                 _input[0] = header->masses[0];
                 _input[1] = header->masses[1];
                 _input[2] = header->masses[2];
-                if (*_ptr++ > pairs_per_file) {
+                // std::cout << "*_ptr: " << _mppf << ", N: " << header->N << std::endl;
+                if (_mppf > pairs_per_file) {
                     dist.param(std::uniform_int_distribution<uint64_t>::param_type{0, header->N - 1});
                     pcounter = 0;
                     while (pcounter++ < pairs_per_file) {
