@@ -1,8 +1,9 @@
 import matplotlib.pyplot as plt
 import math
+import sys
 
-plt.rcParams["text.usetex"] = True
-plt.rcParams["font.family"] = "Helvetica"
+# plt.rcParams["text.usetex"] = True
+# plt.rcParams["font.family"] = "Helvetica"
 
 tpath = "train_losses.csv"
 vpath = "val_losses.csv"
@@ -22,18 +23,22 @@ def main():
     tf.close()
     vf.close()
     fig, ax = plt.subplots()
-    title = f"Training and Validation Losses vs Epoch Number"
+    title = f"Training and Validation Errors vs Epoch Number"
     ax.set_title(title)
-    ax.plot(tlosses.keys(), tlosses.values(), label="Training set")
-    ax.plot(vlosses.keys(), vlosses.values(), label="Val. set")
+    last_val = 50
+    ax.plot(list(tlosses.keys())[:last_val], list(tlosses.values())[:last_val], label="Training set")
+    ax.plot(list(vlosses.keys())[:last_val], list(vlosses.values())[:last_val], label="Val. set")
     ax.set_xlabel("Epoch Number")
-    ax.set_ylabel("Loss")
+    ax.set_ylabel("Mean Square Error")
     # ax.set_xlim([0, None])
     ax.set_ylim([0, None])
     ax.grid()
     ax.legend()
     plt.show()
-    fig.savefig(f"figure.png")
+    if len(sys.argv) == 2:
+        fig.savefig(sys.argv[1])
+    else:
+        fig.savefig(f"figure.pdf")
 
 
 if __name__ == "__main__":

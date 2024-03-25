@@ -790,7 +790,7 @@ int main(int argc, char **argv) {
     // vlossrf = parser.get_arg("--vloss_rec_freq", DEF_REC_FREQ);
     auto _num = parser.remaining();
     val_ppf = parser.get_arg("--val_ppf", pairs_per_file);
-    if (parser.remaining() != _num && val_dir) {
+    if (parser.remaining() != _num && !val_dir) {
         std::cout << "Error: \"--val_ppf\" (num. val. set pairs per file) cannot be passed if the validation set "
                      "directory is not passed as well.\n";
         return 1;

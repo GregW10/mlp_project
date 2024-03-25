@@ -20,8 +20,8 @@ namespace gtd {
         T _mvel{}; // maximum absolute velocity component
         virtual h_type *normalise_header(h_type*) const = 0;
         virtual e_type *normalise_entry(e_type*) const = 0;
-        constexpr virtual uint64_t get_id() const noexcept {return 0;}
     public:
+        constexpr virtual uint64_t get_id() const noexcept {return 0;}
 #pragma pack(push, 1)
         struct normv_file {
             const char header[4] = {'N', 'O', 'R', 'M'};
@@ -158,6 +158,16 @@ namespace gtd {
                     throw std::invalid_argument{"Error: all max./min. values must be non-negative.\n"};
                 if (_f._minm > _f._maxm)
                     throw std::invalid_argument{"Error: minimum mass cannot be greater than maximum mass.\n"};
+                if (!(_f._id & get_id())) {
+                    std::string error = "Error: the ID of the normaliser ID inside \"";
+                    error += path;
+                    error += "\" (";
+                    error += std::to_string(_f._id);
+                    error += ") does not correspond to this normaliser's ID (";
+                    error += std::to_string(get_id());
+                    error += ").\nBitwise AND failed.\n";
+                    throw std::invalid_argument{error};
+                }
                 this->_mmass = _f._maxm;
                 this->_nmass = _f._minm;
                 this->_mtime = _f._maxt;
@@ -170,10 +180,11 @@ namespace gtd {
     };
     template <typename T> requires (std::is_floating_point_v<T>)
     class mass_normaliser : virtual public normaliser<T> {
-    protected:
+    public:
         constexpr uint64_t get_id() const noexcept override {
             return 0b00000001; // 1
         }
+    protected:
         using typename normaliser<T>::h_type;
         using typename normaliser<T>::e_type;
         h_type *normalise_header(h_type *_h) const override {
@@ -192,11 +203,12 @@ namespace gtd {
     };
     template <typename T> requires (std::is_floating_point_v<T>)
     class log_mass_normaliser : public virtual normaliser<T> {
-    protected:
+    public:
         T _lmax;
         constexpr uint64_t get_id() const noexcept override {
             return 0b00000010; // 2
         }
+    protected:
         using typename normaliser<T>::h_type;
         using typename normaliser<T>::e_type;
         h_type *normalise_header(h_type *_h) const override {
@@ -249,10 +261,11 @@ namespace gtd {
     };
     template <typename T> requires (std::is_floating_point_v<T>)
     class time_normaliser : public virtual normaliser<T> {
-    protected:
+    public:
         constexpr uint64_t get_id() const noexcept override {
             return 0b00000100; // 4
         }
+    protected:
         using typename normaliser<T>::h_type;
         using typename normaliser<T>::e_type;
         h_type *normalise_header(h_type *_h) const override {
@@ -270,10 +283,11 @@ namespace gtd {
     };
     template <typename T> requires (std::is_floating_point_v<T>)
     class pos_normaliser : public virtual normaliser<T> {
-    protected:
+    public:
         constexpr uint64_t get_id() const noexcept override {
             return 0b00001000; // 8
         }
+    protected:
         using typename normaliser<T>::h_type;
         using typename normaliser<T>::e_type;
         h_type *normalise_header(h_type *_h) const override {
@@ -294,10 +308,11 @@ namespace gtd {
     };
     template <typename T> requires (std::is_floating_point_v<T>)
     class vel_normaliser : public virtual normaliser<T> {
-    protected:
+    public:
         constexpr uint64_t get_id() const noexcept override {
             return 0b00010000; // 16
         }
+    protected:
         using typename normaliser<T>::h_type;
         using typename normaliser<T>::e_type;
         h_type *normalise_header(h_type *_h) const override {
@@ -323,10 +338,11 @@ namespace gtd {
     template <typename T, typename ...Args> requires (std::is_floating_point_v<T> && sizeof...(Args) > 0 &&
                                                      (std::is_base_of_v<normaliser<T>, Args> && ...))
     class gen_normaliser : public Args... {
-    protected:
+    public:
         constexpr uint64_t get_id() const noexcept override {
             return (Args::get_id() | ...); // take bitwise OR of all IDs of parent classes
         }
+    protected:
         using h_type = typename f3bodr<T>::hdr_t;
         using e_type = typename f3bodr<T>::entry_type;
         h_type *normalise_header(h_type *_h) const override {
