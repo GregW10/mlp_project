@@ -204,11 +204,11 @@ namespace gtd {
     template <typename T> requires (std::is_floating_point_v<T>)
     class log_mass_normaliser : public virtual normaliser<T> {
     public:
-        T _lmax;
         constexpr uint64_t get_id() const noexcept override {
             return 0b00000010; // 2
         }
     protected:
+        T _lmax;
         using typename normaliser<T>::h_type;
         using typename normaliser<T>::e_type;
         h_type *normalise_header(h_type *_h) const override {
